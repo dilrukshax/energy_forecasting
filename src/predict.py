@@ -1,53 +1,101 @@
-"""Reload saved preprocessing and selected deep model to predict one NEW reading."""
+"""Inference and operational forecasting for the next 10-minute interval."""
 import argparse
 import json
 from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-import torch
-from .data_preprocessing import load_data
-from .feature_engineering import make_features
-from .model import EnergyRNN
+from tensorflow import keras
+
+from .data_preprocessing import load_data, winsorise
+from .feature_engineering import build_features
 
 
-def forecast_next(history_path, model_root="."):
-    """Forecast the timestamp 10 minutes after the last observed history record.
+def forecast_next(history_data, model_path="models/best_model.keras", preprocessor_path="models/preprocessor.joblib"):
+    """Forecast appliance energy consumption (Wh) for the next 10-minute interval.
 
-    Supply the SAME sensor schema and enough recent measured energy history.
-    This is one-step forecasting, not a recursive day-ahead forecasting API.
-    Only load checkpoints/joblib files produced by this trusted project.
+    Parameters
+    ----------
+    history_data : str, Path, or pd.DataFrame
+        Path to recent history CSV or a DataFrame of past readings.
+        Must contain at least 1 week + lookback of readings to construct features without NaN.
+    model_path : str or Path
+        Path to the saved TensorFlow/Keras model (.keras).
+    preprocessor_path : str or Path
+        Path to the saved preprocessor dictionary (.joblib).
+
+    Returns
+    -------
+    dict
+        Forecast metadata including timestamp, predicted Wh, and model info.
     """
-    root = Path(model_root)
-    selected = json.loads((root/"reports"/"selection_frozen_before_test.json").read_text())["selected_deep_model"]
-    preprocessing = joblib.load(root/"models"/"preprocessing.joblib")
-    checkpoint = torch.load(root/"models"/f"{selected}.pt", map_location="cpu", weights_only=True)
-    trial = checkpoint["trial"]
-    frame = load_data(history_path)
-    required = preprocessing["max_lag"] + trial["lookback"] - 1
-    if len(frame) < required:
-        raise ValueError(f"Need at least {required} consecutive measured history rows.")
-    next_date = frame.index[-1] + pd.Timedelta(minutes=10)
-    future_row = pd.DataFrame(np.nan, index=pd.DatetimeIndex([next_date], name="date"), columns=frame.columns)
-    extended = pd.concat([frame, future_row])
-    features = make_features(extended, preprocessing["lags"])[preprocessing["all_columns"]]
-    scaled = preprocessing["x_scaler"].transform(preprocessing["imputer"].transform(features))
-    positions = [preprocessing["all_columns"].index(name) for name in preprocessing["selected"]]
-    sequence = scaled[-trial["lookback"]:, positions].astype(np.float32)
-    model = EnergyRNN(checkpoint["n_features"], **{key: trial[key] for key in ["kind", "hidden", "layers", "dropout"]})
-    model.load_state_dict(checkpoint["state_dict"])
-    model.eval()
-    with torch.no_grad():
-        standardized = model(torch.from_numpy(sequence[None])).item()
-    energy = preprocessing["y_scaler"].inverse_transform([[standardized]])[0, 0]
-    return {"forecast_timestamp": str(next_date), "predicted_energy_Wh": float(max(0, energy)),
-            "model": selected, "horizon_minutes": 10,
-            "note": "Point forecast; actual next reading is not supplied or known."}
+    model_p = Path(model_path)
+    prep_p = Path(preprocessor_path)
+
+    if not model_p.exists():
+        raise FileNotFoundError(f"Trained model not found at {model_path}. Run training first.")
+    if not prep_p.exists():
+        raise FileNotFoundError(f"Preprocessor artifact not found at {preprocessor_path}.")
+
+    preprocessor = joblib.load(prep_p)
+    model = keras.models.load_model(model_p)
+
+    if isinstance(history_data, (str, Path)):
+        df = load_data(history_data)
+    else:
+        df = history_data.copy()
+
+    lookback = preprocessor["lookback"]
+    target_col = preprocessor["target"]
+    selected_features = preprocessor["selected_features"]
+    fences = preprocessor["fences"]
+    x_scaler = preprocessor["x_scaler"]
+    y_scaler = preprocessor["y_scaler"]
+
+    # Build features on history
+    X_features, _ = build_features(df, target=target_col)
+
+    if len(X_features) < lookback:
+        raise ValueError(f"Need at least {lookback} feature rows after warm-up; received {len(X_features)}.")
+
+    # Winsorise and scale
+    X_winsor = winsorise(X_features, fences)
+    X_scaled = x_scaler.transform(X_winsor)
+    X_df_scaled = pd.DataFrame(X_scaled, index=X_features.index, columns=X_features.columns)
+
+    # Extract sequence window for prediction
+    recent_window = X_df_scaled[selected_features].iloc[-lookback:].values
+    input_sequence = np.expand_dims(recent_window, axis=0)  # Shape: (1, lookback, n_features)
+
+    # Predict in model space
+    pred_scaled = model.predict(input_sequence, verbose=0).ravel()[0]
+
+    # Invert to physical Wh units
+    pred_wh = float(y_scaler.inverse_transform([pred_scaled])[0])
+
+    last_timestamp = df.index[-1]
+    forecast_timestamp = last_timestamp + pd.Timedelta(minutes=10)
+
+    return {
+        "last_observed_timestamp": str(last_timestamp),
+        "forecast_timestamp": str(forecast_timestamp),
+        "forecast_horizon": "10 minutes",
+        "predicted_energy_Wh": round(pred_wh, 2),
+        "model_file": str(model_p.name),
+        "features_used": len(selected_features),
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Predict next 10-minute appliance energy consumption.")
+    parser.add_argument("--history", default="data/raw/energy_data_set.csv", help="Path to history CSV.")
+    parser.add_argument("--model", default="models/best_model.keras", help="Path to trained .keras model.")
+    parser.add_argument("--preprocessor", default="models/preprocessor.joblib", help="Path to preprocessor .joblib.")
+    args = parser.parse_args()
+
+    result = forecast_next(args.history, model_path=args.model, preprocessor_path=args.preprocessor)
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--history", default="data/raw/energy_data_set.csv")
-    parser.add_argument("--model-root", default=".")
-    args = parser.parse_args()
-    print(json.dumps(forecast_next(args.history, args.model_root), indent=2))
+    main()

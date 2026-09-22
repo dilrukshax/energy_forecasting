@@ -1,84 +1,120 @@
-"""Read, audit and validate the supplied dataset without learning from test data."""
+"""Data loading, temporal validation, cleaning, and scaling routines."""
 from pathlib import Path
-import hashlib
 import numpy as np
 import pandas as pd
-from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 
 TARGET = "Appliances"
-LOCAL = ["lights"] + [item for i in range(1, 10) for item in (f"T{i}", f"RH_{i}")]
+FREQ = "10min"
+NO_CLIP_FEATURES = {
+    "hour", "day_of_week", "month", "is_weekend", "nsm",
+    "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+    "is_holiday", "is_non_working", "evening_peak_flag", "hour_x_weekend"
+}
 
 
 def load_data(path):
-    """Parse numeric fields, sort time, and reject ambiguous or irregular timestamps.
+    """Load the raw CSV, parse timestamps, sort chronologically, and validate."""
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Dataset not found at {path}")
 
-    Missing sensor values are permitted (causal fill and training medians follow).
-    Missing target labels and gaps are rejected rather than silently fabricated.
-    """
-    frame = pd.read_csv(path)
-    required = ["date", TARGET, *LOCAL]
-    missing = set(required) - set(frame.columns)
-    if missing:
-        raise ValueError(f"Missing columns: {sorted(missing)}")
-    frame["date"] = pd.to_datetime(frame["date"], errors="raise")
-    if frame["date"].isna().any() or frame["date"].duplicated().any():
-        raise ValueError("Missing or duplicate timestamps require a documented resolution.")
-    frame = frame.sort_values("date").set_index("date")
-    for column in frame.columns:
-        frame[column] = pd.to_numeric(frame[column], errors="raise")
-    if np.isinf(frame.to_numpy()).any():
-        raise ValueError("Infinite measurements must be investigated.")
-    if frame[TARGET].isna().any() or (frame[TARGET] < 0).any():
-        raise ValueError("Missing/negative target labels must be investigated, not imputed.")
-    if not frame.index.to_series().diff().iloc[1:].eq(pd.Timedelta(minutes=10)).all():
-        raise ValueError("Expected a regular 10-minute grid; do not bridge gaps silently.")
+    frame = pd.read_csv(p, parse_dates=["date"]).sort_values("date").set_index("date")
+
+    if frame.index.duplicated().any():
+        raise ValueError("Dataset contains duplicate timestamps.")
+
+    if TARGET not in frame.columns:
+        raise ValueError(f"Target column '{TARGET}' missing from dataset.")
+
+    if frame[TARGET].isna().any():
+        raise ValueError("Missing target labels found; target cannot be imputed.")
+
+    # Drop documented random noise variables if present
+    drop_cols = [c for c in ["rv1", "rv2"] if c in frame.columns]
+    if drop_cols:
+        frame = frame.drop(columns=drop_cols)
+
     return frame
 
 
-def split_boundaries(n_rows):
-    """First 80% is development; its first 80% is training (64/16/20 overall)."""
-    development_end = int(n_rows * 0.80)
-    train_end = int(development_end * 0.80)
-    return train_end, development_end
+def enforce_regular_grid(frame, freq=FREQ, interp_limit=6):
+    """Ensure time index is on a regular grid and causal forward-fill short gaps."""
+    full_idx = pd.date_range(frame.index.min(), frame.index.max(), freq=freq)
+    if len(full_idx) == len(frame) and full_idx.equals(frame.index):
+        return frame.copy()
+
+    reindexed = frame.reindex(full_idx)
+
+    # Exogenous columns can be forward-filled for up to interp_limit steps (1 hour for 10-min data)
+    exog = [c for c in reindexed.columns if c != TARGET]
+    reindexed[exog] = reindexed[exog].ffill(limit=interp_limit)
+
+    # Missing targets cannot be imputed
+    if reindexed[TARGET].isna().any():
+        raise ValueError(
+            "Target column has missing timestamps on the regular grid that cannot be safely fabricated."
+        )
+
+    return reindexed
 
 
-def fit_feature_preprocessing(features, train_end, history_start):
-    """Fit median imputation and standardization on complete-history training rows.
-
-    Transform the full timeline with those fixed statistics. Validation and test
-    rows never contribute to the fitted medians, means or standard deviations.
-    """
-    training = features.iloc[history_start:train_end]
-    if training.empty or training.isna().all().any():
-        raise ValueError("Every feature needs observed training values.")
-    imputer = SimpleImputer(strategy="median").fit(training)
-    scaler = StandardScaler().fit(imputer.transform(training))
-    transformed = scaler.transform(imputer.transform(features)).astype(np.float32)
-    return transformed, imputer, scaler
+def iqr_bounds(series, k=1.5):
+    """Compute Tukey IQR bounds (Q1 - k*IQR, Q3 + k*IQR)."""
+    clean = series.dropna()
+    q1, q3 = np.percentile(clean, [25, 75])
+    iqr = q3 - q1
+    return float(q1 - k * iqr), float(q3 + k * iqr)
 
 
-def audit_data(frame, source_path):
-    """Return data-quality facts, provenance and outlier flags, without changing data."""
-    train_end, test_start = split_boundaries(len(frame))
-    train = frame.iloc[:train_end]
-    q1, q3 = train[TARGET].quantile([0.25, 0.75])
-    low, high = float(q1 - 1.5 * (q3 - q1)), float(q3 + 1.5 * (q3 - q1))
-    flags = ((frame[TARGET] < low) | (frame[TARGET] > high))
-    return {
-        "source_sha256": hashlib.sha256(Path(source_path).read_bytes()).hexdigest(),
-        "rows": len(frame), "columns_including_date": len(frame.columns) + 1,
-        "start": str(frame.index[0]), "end": str(frame.index[-1]),
-        "missing_cells": int(frame.isna().sum().sum()),
-        "missing_by_column": frame.isna().sum().astype(int).to_dict(),
-        "duplicate_timestamps": int(frame.index.duplicated().sum()),
-        "interval_minutes": 10,
-        "rv1_equals_rv2": bool(frame.rv1.equals(frame.rv2)) if "rv1" in frame and "rv2" in frame else None,
-        "target_summary_wh": frame[TARGET].describe(percentiles=[0.01, 0.5, 0.95, 0.99]).to_dict(),
-        "train_iqr_bounds_wh": [low, high],
-        "iqr_flag_count_train": int(flags.iloc[:train_end].sum()),
-        "iqr_flag_count_all": int(flags.sum()),
-        "outlier_action": "Retain all observed energy peaks; an IQR flag is not proof of sensor error.",
-        "train_end_exclusive": train_end, "test_start": test_start,
-        "airport_weather_policy": "Exclude from predictors: upstream hourly interpolation is not demonstrably causal.",
-    }
+def calculate_winsor_bounds(df, clip_cols=None, k=3.0):
+    """Derive winsorization fences for predictor columns (computed on training data only)."""
+    if clip_cols is None:
+        clip_cols = [c for c in df.columns if c not in NO_CLIP_FEATURES]
+    return {c: iqr_bounds(df[c], k=k) for c in clip_cols if c in df.columns}
+
+
+def winsorise(frame, bounds):
+    """Clip features to pre-computed bounds."""
+    out = frame.copy()
+    for col, (low, high) in bounds.items():
+        if col in out.columns:
+            out[col] = out[col].clip(low, high)
+    return out
+
+
+class TargetScaler:
+    """StandardScaler in log1p space with exact inverse transformation back to Wh."""
+
+    def __init__(self):
+        self.scaler = StandardScaler()
+
+    def fit(self, y):
+        values = np.log1p(np.asarray(y, float)).reshape(-1, 1)
+        self.scaler.fit(values)
+        return self
+
+    def transform(self, y):
+        values = np.log1p(np.asarray(y, float)).reshape(-1, 1)
+        return self.scaler.transform(values).ravel()
+
+    def inverse_transform(self, y_scaled):
+        values = np.asarray(y_scaled, float).reshape(-1, 1)
+        unscaled = self.scaler.inverse_transform(values).ravel()
+        # Appliances energy consumption is strictly non-negative
+        return np.maximum(0.0, np.expm1(unscaled))
+
+
+def save_preprocessed_data(X_train, y_train, X_val, y_val, X_test, y_test, output_dir="data/processed"):
+    """Save processed feature matrices and targets to CSV files."""
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    for name, X_split, y_split in [("train", X_train, y_train),
+                                   ("val", X_val, y_val),
+                                   ("test", X_test, y_test)]:
+        df_split = pd.DataFrame(X_split, index=y_split.index) if not isinstance(X_split, pd.DataFrame) else X_split.copy()
+        df_split["target_Wh"] = y_split.values
+        df_split.to_csv(out_path / f"{name}_processed.csv")
+
+    print(f"Preprocessed data splits successfully saved to {out_path}")

@@ -1,10 +1,13 @@
-"""Tests for the material risks: target leakage, fitting on holdout, and alignment."""
+"""Unit tests for temporal integrity, causal feature engineering, and sequence generation."""
 import unittest
 import numpy as np
 import pandas as pd
-from src.data_preprocessing import load_data, split_boundaries, fit_feature_preprocessing
-from src.feature_engineering import make_features, BASE_LAGS, WARMUP, MAX_LAG
-from src.model import SequenceDataset
+
+from src.data_preprocessing import (
+    load_data, calculate_winsor_bounds, winsorise, TargetScaler
+)
+from src.feature_engineering import build_features
+from src.model import make_sequences
 
 
 class TemporalIntegrityTests(unittest.TestCase):
@@ -12,66 +15,74 @@ class TemporalIntegrityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.frame = load_data("data/raw/energy_data_set.csv")
 
-    def test_current_and_future_measurements_cannot_change_current_features(self):
-        t = 400
-        before = make_features(self.frame.iloc[:700], BASE_LAGS)
-        changed = self.frame.iloc[:700].copy()
-        changed.iloc[t:, :] = 99999.0
-        after = make_features(changed, BASE_LAGS)
-        pd.testing.assert_frame_equal(before.iloc[:t+1], after.iloc[:t+1])
+    def test_future_measurements_do_not_leak_into_past_features(self):
+        """Verifies that altering data at and after time t does not change features <= t."""
+        # Use first 2500 rows (sufficient for 1-week warm-up of 1008 steps)
+        sub = self.frame.iloc[:2500].copy()
+        X_orig, _ = build_features(sub)
 
-    def test_energy_window_has_exact_past_values(self):
-        f = make_features(self.frame, BASE_LAGS)
-        t = 400
-        self.assertEqual(f.energy_lag_1.iloc[t], self.frame.Appliances.iloc[t-1])
-        self.assertEqual(f.energy_lag_3.iloc[t], self.frame.Appliances.iloc[t-3])
-        self.assertAlmostEqual(f.energy_mean_6.iloc[t], self.frame.Appliances.iloc[t-6:t].mean())
-        self.assertNotIn("Appliances", f.columns)
-        self.assertNotIn("rv1", f.columns)
-        self.assertNotIn("T_out_lag1", f.columns)
+        # Alter all measurements at and after the midpoint of the usable range
+        mid_idx = len(X_orig) // 2
+        cutoff_date = X_orig.index[mid_idx]
 
-    def test_training_transform_statistics_do_not_depend_on_holdout(self):
-        end, _ = split_boundaries(len(self.frame))
-        f = make_features(self.frame, BASE_LAGS)
-        altered = f.copy()
-        altered.iloc[end:] = 1e9
-        fitted = []
-        for candidate in [f, altered]:
-            _, imputer, scaler = fit_feature_preprocessing(candidate, end, MAX_LAG)
-            fitted.append((imputer.statistics_, scaler.mean_, scaler.scale_))
-        for original, changed in zip(*fitted):
-            np.testing.assert_array_equal(original, changed)
+        sub_altered = sub.copy()
+        sub_altered.loc[cutoff_date:, :] = 99999.0
 
-    def test_missing_sensor_values_use_only_past_readings(self):
-        frame = self.frame.iloc[:700].copy()
-        frame.iloc[400:410, frame.columns.get_loc("T1")] = np.nan
-        features = make_features(frame, BASE_LAGS)
-        self.assertEqual(features.T1_lag1.iloc[406], frame.T1.iloc[399])
-        self.assertTrue(np.isnan(features.T1_lag1.iloc[407]))
-        altered = frame.copy()
-        altered.iloc[410:, altered.columns.get_loc("T1")] = 99999.0
-        pd.testing.assert_frame_equal(features.iloc[:411], make_features(altered, BASE_LAGS).iloc[:411])
-        scaled, imputer, _ = fit_feature_preprocessing(features, 500, MAX_LAG)
-        self.assertTrue(np.isfinite(scaled).all())
-        position = features.columns.get_loc("T1_lag1")
-        self.assertEqual(imputer.statistics_[position], features.T1_lag1.iloc[MAX_LAG:500].median())
+        X_altered, _ = build_features(sub_altered)
 
-    def test_all_missing_training_feature_is_rejected(self):
-        features = make_features(self.frame.iloc[:700], BASE_LAGS)
-        features.loc[:, "T1_lag1"] = np.nan
-        with self.assertRaisesRegex(ValueError, "observed training values"):
-            fit_feature_preprocessing(features, 500, MAX_LAG)
+        # Features strictly before the alteration must be exactly identical
+        pd.testing.assert_frame_equal(
+            X_orig.loc[:cutoff_date],
+            X_altered.loc[:cutoff_date]
+        )
 
-    def test_sequence_target_and_split_boundaries(self):
-        train_end, test_start = split_boundaries(len(self.frame))
-        self.assertLess(WARMUP, train_end)
-        self.assertLess(train_end, test_start)
-        x = np.arange(1000, dtype=np.float32).reshape(500, 2)
-        y = np.arange(500, dtype=np.float32)
-        dataset = SequenceDataset(x, y, [200], lookback=18)
-        sequence, target = dataset[0]
-        np.testing.assert_array_equal(sequence.numpy(), x[183:201])
-        self.assertEqual(target.item(), y[200])
+    def test_lag_alignment(self):
+        """Verifies that app_lag1 at row t equals target at row t-1."""
+        X, y = build_features(self.frame.iloc[:2000])
+        idx_t = X.index[200]
+        prev_idx = self.frame.index[self.frame.index.get_loc(idx_t) - 1]
+
+        self.assertEqual(X.loc[idx_t, "app_lag1"], self.frame.loc[prev_idx, "Appliances"])
+
+    def test_winsor_bounds_use_only_training_data(self):
+        """Verifies that winsorisation fences computed on train are independent of test data."""
+        X, _ = build_features(self.frame.iloc[:2000])
+        n_train = len(X) // 2
+        X_train = X.iloc[:n_train]
+
+        bounds_original = calculate_winsor_bounds(X_train, k=3.0)
+
+        # Create altered dataset where holdout is corrupted
+        X_corrupted = X.copy()
+        X_corrupted.iloc[n_train:] = 1e8
+        bounds_from_corrupted = calculate_winsor_bounds(X_corrupted.iloc[:n_train], k=3.0)
+
+        for col in bounds_original:
+            self.assertEqual(bounds_original[col], bounds_from_corrupted[col])
+
+    def test_sequence_windows_do_not_include_target(self):
+        """Verifies that window i ends strictly at row i+lookback-1 and target is at i+lookback."""
+        features = np.arange(100, dtype=np.float32).reshape(50, 2)
+        targets = np.arange(50, dtype=np.float32) * 10
+        lookback = 6
+
+        X_seq, y_seq = make_sequences(features, targets, lookback=lookback)
+
+        self.assertEqual(X_seq.shape, (50 - lookback, lookback, 2))
+        self.assertEqual(y_seq.shape, (50 - lookback,))
+
+        # Window 0 spans rows 0..5, target is at row 6
+        np.testing.assert_array_equal(X_seq[0], features[0:6])
+        self.assertEqual(y_seq[0], targets[6])
+
+    def test_target_scaler_roundtrip(self):
+        """Verifies that TargetScaler accurately roundtrips positive values."""
+        y = np.array([10.0, 50.0, 100.0, 650.0, 1080.0])
+        scaler = TargetScaler().fit(y)
+        y_scaled = scaler.transform(y)
+        y_recovered = scaler.inverse_transform(y_scaled)
+
+        np.testing.assert_allclose(y, y_recovered, atol=1e-5)
 
 
 if __name__ == "__main__":

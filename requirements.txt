@@ -1,12 +1,13 @@
-# Python 3.12; executed versions are recorded in reports/run_summary.json.
-numpy==2.3.5
-pandas==2.2.3
-scikit-learn==1.8.0
-scipy==1.17.0
-matplotlib==3.10.8
-seaborn==0.13.2
-joblib==1.5.3
-torch==2.5.1
-nbformat==5.10.4
-nbclient==0.10.2
-ipykernel==6.29.5
+# Python 3.12 requirements
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+scipy>=1.13.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+joblib>=1.4.0
+tensorflow>=2.16.0
+torch>=2.2.0
+nbformat>=5.10.0
+nbclient>=0.10.0
+ipykernel>=6.29.0
