@@ -1,8 +1,0 @@
-{
-  "selection_metric": "validation RMSE in Wh after nonnegative clipping",
-  "selected_deep_model": "LSTM_initial",
-  "overall_validation_champion": "RandomForest_selected",
-  "baseline_reference": "LSTM_initial",
-  "test_used_for_selection": false,
-  "refit_on_validation": false
-}
