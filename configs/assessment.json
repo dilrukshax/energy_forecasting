@@ -1,0 +1,13 @@
+{
+  "seed": 42,
+  "threads": 2,
+  "top_k": 24,
+  "max_epochs": 25,
+  "patience": 5,
+  "trials": [
+    {"name": "LSTM_initial", "kind": "LSTM", "hidden": 32, "layers": 1, "dropout": 0.1, "lr": 0.001, "batch_size": 128, "lookback": 18},
+    {"name": "GRU_initial", "kind": "GRU", "hidden": 32, "layers": 1, "dropout": 0.1, "lr": 0.001, "batch_size": 128, "lookback": 18},
+    {"name": "LSTM_tuned", "kind": "LSTM", "hidden": 64, "layers": 1, "dropout": 0.2, "lr": 0.0005, "batch_size": 64, "lookback": 36},
+    {"name": "GRU_tuned", "kind": "GRU", "hidden": 64, "layers": 2, "dropout": 0.2, "lr": 0.0005, "batch_size": 128, "lookback": 36}
+  ]
+}
