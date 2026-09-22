@@ -76,7 +76,7 @@ def make_results_plots(predictions, metrics, histories, selected_name, outdir):
     save_figure(fig, outdir / "06_metric_comparison.png")
     fig, axes = plt.subplots(2, 1, figsize=(10, 5))
     for ax, subset, title in [(axes[0], predictions, "Entire test period"),
-                             (axes[1], predictions.iloc[:288], "First 48 test hours (fixed, not cherry-picked)")]:
+                             (axes[1], predictions.iloc[:288], "First 48 test hours")]:
         ax.plot(subset.index, subset.actual, lw=.7, label="Actual", color="#404040")
         ax.plot(subset.index, subset[selected_name], lw=.7, alpha=.85, label=selected_name, color=GREEN)
         ax.set(title=title, ylabel="Wh")
@@ -100,8 +100,8 @@ def make_results_plots(predictions, metrics, histories, selected_name, outdir):
     fig, ax = plt.subplots(figsize=(9, 4))
     for name, history in histories.items():
         h = pd.DataFrame(history)
-        ax.plot(h.epoch, h.val_mse, label=f"{name} validation")
-        ax.plot(h.epoch, h.train_mse, ls="--", alpha=.45)
+        line, = ax.plot(h.epoch, h.val_mse, label=name)
+        ax.plot(h.epoch, h.train_mse, ls="--", alpha=.65, color=line.get_color())
     ax.set(title="Learning curves: solid validation, dashed training", xlabel="Epoch", ylabel="Standardized-target MSE")
     ax.legend(fontsize=7, ncol=2)
     save_figure(fig, outdir / "09_learning_curves.png")

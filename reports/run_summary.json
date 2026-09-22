@@ -1,0 +1,87 @@
+{
+  "selection_metric": "validation RMSE in Wh after nonnegative clipping",
+  "selected_deep_model": "LSTM_initial",
+  "overall_validation_champion": "RandomForest_selected",
+  "baseline_reference": "LSTM_initial",
+  "test_used_for_selection": false,
+  "refit_on_validation": false,
+  "settings": {
+    "seed": 42,
+    "threads": 2,
+    "top_k": 24,
+    "max_epochs": 25,
+    "patience": 5,
+    "trials": [
+      {
+        "name": "LSTM_initial",
+        "kind": "LSTM",
+        "hidden": 32,
+        "layers": 1,
+        "dropout": 0.1,
+        "lr": 0.001,
+        "batch_size": 128,
+        "lookback": 18
+      },
+      {
+        "name": "GRU_initial",
+        "kind": "GRU",
+        "hidden": 32,
+        "layers": 1,
+        "dropout": 0.1,
+        "lr": 0.001,
+        "batch_size": 128,
+        "lookback": 18
+      },
+      {
+        "name": "LSTM_tuned",
+        "kind": "LSTM",
+        "hidden": 64,
+        "layers": 1,
+        "dropout": 0.2,
+        "lr": 0.0005,
+        "batch_size": 64,
+        "lookback": 36
+      },
+      {
+        "name": "GRU_tuned",
+        "kind": "GRU",
+        "hidden": 64,
+        "layers": 2,
+        "dropout": 0.2,
+        "lr": 0.0005,
+        "batch_size": 128,
+        "lookback": 36
+      }
+    ]
+  },
+  "device": "cpu",
+  "python": "3.12.13",
+  "versions": {
+    "numpy": "2.3.5",
+    "pandas": "2.2.3",
+    "scikit-learn": "1.8.0",
+    "torch": "2.5.1",
+    "matplotlib": "3.10.8",
+    "seaborn": "0.13.2",
+    "joblib": "1.5.3"
+  },
+  "seed": 42,
+  "n_features_before_selection": 50,
+  "n_features_selected": 25,
+  "history_warmup_rows": 179,
+  "train_samples": 12451,
+  "validation_samples": 3158,
+  "test_samples": 3947,
+  "lags": [
+    1,
+    2,
+    3,
+    4,
+    6,
+    18,
+    144
+  ],
+  "total_seconds": 84.30583066700274,
+  "test_protocol": "Rolling one-step: earlier true observations become available before later forecasts; no weight updates on test.",
+  "source_sha256": "2820bf712ad0275cb18b85a05250926100d8e65ebb9f4d2d016ca91ea152a25d"
+}
