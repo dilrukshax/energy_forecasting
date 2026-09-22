@@ -10,26 +10,20 @@ from energy_forecast.evaluation.metrics import compute_metrics, error_by_level, 
 from energy_forecast.training.sequences import make_sequences
 
 
-def test_window_ends_strictly_before_its_target():
-    """Window i must contain rows i..i+lookback-1 and predict row i+lookback.
-
-    If this alignment is off by one the model is handed the answer, which looks like a
-    spectacular result and is worthless.
-    """
+def test_window_includes_target_timestamp_safe_features():
+    """X[t] is safe because FeatureBuilder has already lagged observations."""
     rows, channels, lookback = 50, 3, 6
     features = np.arange(rows * channels, dtype=float).reshape(rows, channels)
     targets = np.arange(rows, dtype=float)
 
     windows, aligned = make_sequences(features, targets, lookback)
 
-    assert windows.shape == (rows - lookback, lookback, channels)
-    assert aligned.shape == (rows - lookback,)
+    assert windows.shape == (rows - lookback + 1, lookback, channels)
+    assert aligned.shape == (rows - lookback + 1,)
 
-    for i in (0, 7, rows - lookback - 1):
+    for i in (0, 7, rows - lookback):
         np.testing.assert_array_equal(windows[i], features[i:i + lookback])
-        assert aligned[i] == targets[i + lookback]
-        # The target's own row must never appear inside its window.
-        assert not np.any(np.all(windows[i] == features[i + lookback], axis=1))
+        assert aligned[i] == targets[i + lookback - 1]
 
 
 def test_make_sequences_validates_its_inputs():
@@ -37,8 +31,8 @@ def test_make_sequences_validates_its_inputs():
     features = np.zeros((10, 2))
     with pytest.raises(ValueError, match="same number of rows"):
         make_sequences(features, np.zeros(9), 3)
-    with pytest.raises(ValueError, match="more than"):
-        make_sequences(features, np.zeros(10), 10)
+    with pytest.raises(ValueError, match="at least"):
+        make_sequences(features, np.zeros(10), 11)
 
 
 def test_metrics_match_hand_computed_values():

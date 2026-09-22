@@ -20,6 +20,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_selection import RFE
 from sklearn.linear_model import Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from energy_forecast.config import Config
 from energy_forecast.exceptions import ConfigurationError
@@ -77,7 +79,9 @@ def select_features(X_train: pd.DataFrame, y_train_scaled: np.ndarray,
     forest.fit(X_train.values, y_train_scaled)
     importances = pd.Series(forest.feature_importances_, index=X_train.columns)
 
-    rfe = RFE(Ridge(alpha=1.0), n_features_to_select=int(settings["n_features_rfe"]), step=5)
+    rfe_estimator = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+    rfe = RFE(estimator=rfe_estimator, n_features_to_select=int(settings["n_features_rfe"]),
+              step=5, importance_getter="named_steps.ridge.coef_")
     rfe.fit(X_train.values, y_train_scaled)
     rfe_keep = set(X_train.columns[rfe.support_])
 

@@ -61,10 +61,10 @@ sequences:
   lookback: 36  # 6 hours of history per window
 
 training:
-  epochs: 60
+  epochs: 100
   batch_size: 64
-  early_stopping_patience: 8
-  reduce_lr_patience: 4
+  early_stopping_patience: 10
+  reduce_lr_patience: 5
   architectures: [lstm, gru, cnn_lstm]
   defaults:
     units: 64
@@ -73,13 +73,13 @@ training:
 
 tuning:
   enabled: true
-  n_trials: 8
-  epochs: 40
-  early_stopping_patience: 6
+  n_trials: 24
+  epochs: 80
+  early_stopping_patience: 10
   search_space:
-    units: [32, 64, 96]
-    dropout: [0.1, 0.2, 0.3]
-    learning_rate: [0.0003, 0.001, 0.003]
+    units: [32, 64, 96, 128]
+    dropout: [0.1, 0.2, 0.3, 0.4]
+    learning_rate: [0.0003, 0.0007, 0.001, 0.002]
     batch_size: [32, 64, 128]
     optimizer: [adam, rmsprop]
 

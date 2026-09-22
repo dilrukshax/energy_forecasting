@@ -55,7 +55,10 @@ class Winsoriser:
 
     def fit(self, X: pd.DataFrame) -> "Winsoriser":
         """Learn fences from the training rows."""
-        self.columns = [c for c in X.columns if c not in NEVER_CLIP]
+        self.columns = [
+            c for c in X.columns
+            if c not in NEVER_CLIP and not c.startswith("app_")
+        ]
         self.bounds = {c: iqr_bounds(X[c], self.multiplier) for c in self.columns}
         capped = float(np.mean([
             ((X[c] < lo) | (X[c] > hi)).mean() for c, (lo, hi) in self.bounds.items()

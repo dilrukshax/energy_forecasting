@@ -122,7 +122,7 @@ def enforce_regular_grid(frame: pd.DataFrame, config: Config) -> tuple[pd.DataFr
 
     before = int(regular.isna().sum().sum())
     limit = int(config.data.get("max_interpolation_steps", 6))
-    regular = regular.interpolate(method="time", limit=limit, limit_direction="both")
+    regular = regular.ffill(limit=limit)
     after = int(regular.isna().sum().sum())
 
     logger.info("grid enforcement: %s timestamps inserted, %s cells interpolated",

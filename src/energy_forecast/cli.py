@@ -110,7 +110,7 @@ def train(config_path: Optional[Path], data_path: Optional[Path], debug: bool,
     reports_dir = config.output_dir("reports_dir")
     configure_logging(logging.DEBUG if debug else logging.INFO, reports_dir / "run.log")
 
-    from energy_forecast import evaluate as ev
+    from energy_forecast import evaluation as ev
     from energy_forecast.training.pipeline import run_all
 
     ev.use_headless_backend()

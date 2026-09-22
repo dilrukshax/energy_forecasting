@@ -25,9 +25,12 @@ data/interim/*
 # Model artefacts and generated figures
 models/*
 !models/.gitkeep
+!models/best_deep_model.keras
+!models/preprocessor.joblib
+!models/selected_features.json
 reports/figures/*
 !reports/figures/.gitkeep
-reports/metrics.json
+!reports/metrics.json
 reports/run.log
 
 # Experiment manifests are generated; keep the directory, not the runs.

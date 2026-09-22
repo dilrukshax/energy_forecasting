@@ -26,6 +26,8 @@ from energy_forecast.exceptions import (
     LeakageError,
     NotFittedError,
 )
+from energy_forecast import evaluation
+from energy_forecast import evaluation as evaluate
 
 __version__ = "0.1.0"
 
@@ -37,4 +39,6 @@ __all__ = [
     "LeakageError",
     "NotFittedError",
     "ArtifactError",
+    "evaluation",
+    "evaluate",
 ]

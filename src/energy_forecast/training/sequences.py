@@ -1,13 +1,15 @@
 """Windowing for the recurrent models.
 
-A recurrent network consumes a window of consecutive rows, not a flat row. The window ending at
-``t - horizon`` predicts the target at ``t``.
+A recurrent network consumes a window of consecutive rows, not a flat row.
+
+X[t] is already constructed by :class:`~energy_forecast.features.FeatureBuilder` so that every
+observed variable only contains information available before y[t].  Therefore the window
+predicting y[t] is allowed to **include** X[t].
 
 Windows are cut once over the whole timeline and then partitioned by *target position*, reusing
 the boundaries computed in :mod:`splitting`. A test window may therefore reach back into
 training-period rows. That is correct rather than leakage: at prediction time the recent past
-genuinely is available. The reverse - a window containing rows at or after its own target -
-cannot occur, and :func:`make_sequences` is covered by a test that asserts it.
+genuinely is available.
 """
 
 from __future__ import annotations
@@ -56,10 +58,15 @@ class SequenceData:
 
 def make_sequences(features: np.ndarray, targets: np.ndarray,
                    lookback: int) -> tuple[np.ndarray, np.ndarray]:
-    """Turn a 2-D feature matrix into overlapping 3-D windows.
+    """Create leakage-safe recurrent windows.
 
-    Window ``i`` spans rows ``i .. i + lookback - 1`` and is paired with the target at row
-    ``i + lookback``: every window ends strictly before the value it predicts.
+    X[t] is already constructed by FeatureBuilder so that every observed
+    variable only contains information available before y[t].
+
+    Therefore the window predicting y[t] is allowed to INCLUDE X[t].
+
+    The window for prediction index ``i`` spans rows ``i .. i + lookback - 1``
+    and is paired with the target at row ``i + lookback - 1``.
 
     Args:
         features: Array of shape (rows, channels).
@@ -74,12 +81,14 @@ def make_sequences(features: np.ndarray, targets: np.ndarray,
     """
     if features.shape[0] != targets.shape[0]:
         raise ValueError("features and targets must have the same number of rows")
-    if features.shape[0] <= lookback:
-        raise ValueError(f"need more than {lookback} rows to build a single window")
+    if features.shape[0] < lookback:
+        raise ValueError(f"need at least {lookback} rows to build a sequence")
 
     windows = np.lib.stride_tricks.sliding_window_view(
-        features, (lookback, features.shape[1])).squeeze(1)[:-1]
-    return np.ascontiguousarray(windows), np.asarray(targets)[lookback:]
+        features, (lookback, features.shape[1])).squeeze(1)
+    aligned_targets = np.asarray(targets)[lookback - 1:]
+
+    return np.ascontiguousarray(windows), aligned_targets
 
 
 def build_sequence_data(X_train: np.ndarray, X_val: np.ndarray, X_test: np.ndarray,
@@ -102,7 +111,7 @@ def build_sequence_data(X_train: np.ndarray, X_val: np.ndarray, X_test: np.ndarr
     targets = np.concatenate([y_train, y_val, y_test])
 
     windows, aligned = make_sequences(features, targets, lookback)
-    target_positions = np.arange(lookback, len(targets))
+    target_positions = np.arange(lookback - 1, len(targets))
 
     is_train = target_positions < split.val_start
     is_val = (target_positions >= split.val_start) & (target_positions < split.test_start)

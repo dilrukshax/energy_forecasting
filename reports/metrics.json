@@ -1,0 +1,102 @@
+{
+  "models": [
+    {
+      "model": "Persistence",
+      "mae": 25.678056593699946,
+      "rmse": 64.65419947595981,
+      "mape": 21.66472476899281,
+      "r2": 0.45113352152152475,
+      "n": 3746
+    },
+    {
+      "model": "Ridge",
+      "mae": 24.716052266255236,
+      "rmse": 60.35756638786277,
+      "mape": 21.028928695509236,
+      "r2": 0.5216600307056559,
+      "n": 3746
+    },
+    {
+      "model": "RandomForest",
+      "mae": 26.705452631012328,
+      "rmse": 59.57936409545257,
+      "mape": 22.990896794292084,
+      "r2": 0.5339151816711563,
+      "n": 3746
+    }
+  ],
+  "best_model": "Ridge",
+  "best_mae_wh": 24.716052266255236,
+  "test_mean_wh": 94.36198611852643,
+  "persistence_mae_wh": 25.678056593699946,
+  "improvement_over_persistence_pct": 3.7464062902670583,
+  "error_by_level": {
+    "mean_abs_error": {
+      "<50": 9.44,
+      "50-100": 13.0,
+      "100-200": 34.98,
+      "200-400": 93.69,
+      ">400": 268.54
+    },
+    "rows": {
+      "<50": 1048,
+      "50-100": 1932,
+      "100-200": 480,
+      "200-400": 206,
+      ">400": 80
+    }
+  },
+  "data_quality": {
+    "n_rows": 19735,
+    "start": "2016-01-11 17:00:00",
+    "end": "2016-05-27 18:00:00",
+    "duplicate_timestamps": 0,
+    "missing_timestamps": 0,
+    "missing_cells": 0,
+    "interpolated_cells": 0,
+    "longest_constant_runs": {
+      "RH_6": 353,
+      "lights": 352,
+      "Visibility": 205,
+      "Windspeed": 121,
+      "T9": 79,
+      "T7": 78,
+      "T5": 62,
+      "RH_8": 42,
+      "T2": 40,
+      "T1": 34
+    }
+  },
+  "selected_features": [
+    "RH_2_lag1",
+    "T2_lag1",
+    "T4_lag1",
+    "T8_lag1",
+    "T_indoor_range",
+    "app_dev_from_24h",
+    "app_diff_1",
+    "app_diff_6",
+    "app_lag1",
+    "app_lag1008",
+    "app_lag12",
+    "app_lag144",
+    "app_lag2",
+    "app_lag3",
+    "app_lag4",
+    "app_lag6",
+    "app_max_1h",
+    "app_max_3h",
+    "app_mean_1h",
+    "app_mean_3h",
+    "app_mean_6h",
+    "app_min_3h",
+    "app_std_1h",
+    "app_std_3h",
+    "app_std_6h",
+    "evening_peak_flag",
+    "hour_cos",
+    "hour_sin",
+    "lights_lag1",
+    "nsm"
+  ]
+}

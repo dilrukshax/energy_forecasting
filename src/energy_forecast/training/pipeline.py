@@ -69,6 +69,11 @@ class PipelineArtifacts:
     trials: List[Any] = field(default_factory=list)
     manifest: Optional[RunManifest] = None
 
+    # Validation-only metrics for architecture selection (never touches test).
+    validation_metrics: Dict[str, Metrics] = field(default_factory=dict)
+    # Trained deep models, so the best can be re-evaluated on test after selection.
+    deep_models: Dict[str, Any] = field(default_factory=dict, repr=False)
+
     # Scaled, selected matrices, kept for the modelling stages.
     X_train_sel: np.ndarray = field(default=None, repr=False)  # type: ignore[assignment]
     X_val_sel: np.ndarray = field(default=None, repr=False)  # type: ignore[assignment]
@@ -156,10 +161,11 @@ def run_baseline_stage(artifacts: PipelineArtifacts) -> PipelineArtifacts:
 
 
 def run_deep_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineArtifacts:
-    """Window the data, train every configured architecture, and score them.
+    """Window the data and train every configured architecture.
 
-    Baseline metrics are recomputed on the windowed test rows so that every model in the final
-    table is scored on an identical set of timestamps.
+    Each architecture is evaluated on the **validation** block only. Test predictions are
+    deferred to :func:`run_tuning_stage` so that architecture and hyperparameter decisions
+    never see the test set.
     """
     from energy_forecast.models.architectures import Hyperparameters, build_model, set_seeds, train
 
@@ -172,19 +178,13 @@ def run_deep_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineAr
         artifacts.split, artifacts.X.index, int(config.sequences["lookback"]),
     )
     artifacts.sequences = sequences
-    actual = artifacts.test_actual
-
-    # Re-score the baselines on the common window so the comparison is like for like.
-    artifacts.metrics = [
-        compute_metrics(actual, values[-len(actual):], name)
-        for name, values in artifacts.predictions.items()
-    ]
 
     defaults = config.training["defaults"]
     params = Hyperparameters(units=int(defaults["units"]), dropout=float(defaults["dropout"]),
                              learning_rate=float(defaults["learning_rate"]),
                              batch_size=int(config.training["batch_size"]))
     transformer = artifacts.preprocessor.target_transformer
+    val_actual = transformer.inverse(sequences.y_val)
 
     for architecture in config.training["architectures"]:
         logger.info("training %s", architecture)
@@ -195,18 +195,26 @@ def run_deep_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineAr
                         early_stopping_patience=int(config.training["early_stopping_patience"]),
                         reduce_lr_patience=int(config.training["reduce_lr_patience"]),
                         verbose=verbose)
-        predicted = transformer.inverse(model.predict(sequences.X_test, verbose=0).ravel())
 
+        val_prediction = transformer.inverse(
+            model.predict(sequences.X_val, verbose=0).ravel())
+
+        artifacts.validation_metrics[architecture] = compute_metrics(
+            val_actual, val_prediction, architecture)
         artifacts.histories[architecture] = history
-        artifacts.predictions[architecture] = predicted
-        artifacts.metrics.append(compute_metrics(actual, predicted, architecture))
-        logger.info("%s scored: MAE %.2f Wh", architecture, artifacts.metrics[-1].mae)
+        artifacts.deep_models[architecture] = model
+        logger.info("%s val MAE %.2f Wh", architecture,
+                    artifacts.validation_metrics[architecture].mae)
 
     return artifacts
 
 
 def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineArtifacts:
-    """Random-search the best recurrent architecture, then re-score it on the test block."""
+    """Select the best architecture from validation, tune it, then score everything on test.
+
+    Architecture selection and hyperparameter search use validation metrics only.
+    The test block is evaluated exactly once, after all modelling decisions are final.
+    """
     from energy_forecast.models.architectures import Hyperparameters, build_model, save_model, train
     from energy_forecast.training.tuning import random_search
 
@@ -217,13 +225,16 @@ def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> Pipeline
     if artifacts.sequences is None:
         raise RuntimeError("run_deep_stage must run before run_tuning_stage")
 
-    table = artifacts.comparison
-    candidates = [m for m in table.index if m in config.training["architectures"]]
-    if not candidates:
-        logger.warning("no deep model to tune; skipping")
-        return artifacts
-    architecture = table.loc[candidates, "mae"].idxmin()
-    logger.info("tuning %s", architecture)
+    # ── Select architecture from VALIDATION metrics (never test). ──
+    if not artifacts.validation_metrics:
+        raise RuntimeError("validation metrics are unavailable; run_deep_stage first")
+
+    architecture = min(
+        artifacts.validation_metrics,
+        key=lambda name: artifacts.validation_metrics[name].mae,
+    )
+    logger.info("tuning %s (best val MAE %.2f Wh)", architecture,
+                artifacts.validation_metrics[architecture].mae)
 
     trials = random_search(architecture, artifacts.sequences,
                            artifacts.preprocessor.target_transformer, config)
@@ -245,15 +256,29 @@ def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> Pipeline
                     verbose=verbose)
 
     label = f"{architecture}_tuned"
-    transformer = artifacts.preprocessor.target_transformer
-    predicted = transformer.inverse(model.predict(artifacts.sequences.X_test, verbose=0).ravel())
-
     artifacts.histories[label] = history
-    artifacts.predictions[label] = predicted
-    artifacts.metrics.append(compute_metrics(artifacts.test_actual, predicted, label))
+    artifacts.deep_models[label] = model
+
+    # ── Final test evaluation: score everything on test ONCE. ──
+    actual = artifacts.test_actual
+    transformer = artifacts.preprocessor.target_transformer
+
+    # Re-score baselines on the windowed test rows so every model covers the same timestamps.
+    artifacts.metrics = [
+        compute_metrics(actual, values[-len(actual):], name)
+        for name, values in artifacts.predictions.items()
+    ]
+
+    # Score each default deep architecture on test.
+    for arch_name, arch_model in artifacts.deep_models.items():
+        predicted = transformer.inverse(
+            arch_model.predict(artifacts.sequences.X_test, verbose=0).ravel())
+        artifacts.predictions[arch_name] = predicted
+        artifacts.metrics.append(compute_metrics(actual, predicted, arch_name))
+        logger.info("%s test MAE %.2f Wh", arch_name, artifacts.metrics[-1].mae)
 
     models_dir = config.output_dir("models_dir")
-    save_model(model, models_dir / "best_model.keras")
+    save_model(model, models_dir / "best_deep_model.keras")
     artifacts.preprocessor.save(models_dir / "preprocessor.joblib")
 
     # The feature order is part of the model contract: inference must slice the scaled matrix
