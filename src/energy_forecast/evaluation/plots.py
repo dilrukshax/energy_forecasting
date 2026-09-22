@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import matplotlib
 import numpy as np
@@ -115,7 +115,7 @@ def plot_metric_comparison(table: pd.DataFrame) -> "matplotlib.figure.Figure":
     return fig
 
 
-def plot_training_history(histories: Mapping[str, object]) -> "matplotlib.figure.Figure":
+def plot_training_history(histories: Mapping[str, Any]) -> "matplotlib.figure.Figure":
     """Training and validation loss curves, one panel per model."""
     plt = _plt()
     fig, ax = plt.subplots(1, max(len(histories), 1), figsize=(5 * len(histories), 3.6),

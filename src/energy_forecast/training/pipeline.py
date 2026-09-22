@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -25,6 +25,7 @@ from energy_forecast.features import FeatureBuilder
 from energy_forecast.utils.logging import get_logger
 from energy_forecast.evaluation.metrics import Metrics, compute_metrics, metrics_table
 from energy_forecast.features.preprocessing import Preprocessor
+from energy_forecast.exceptions import NotFittedError
 from energy_forecast.features.selection import SelectionResult, select_features
 from energy_forecast.training.sequences import SequenceData, build_sequence_data
 from energy_forecast.data.splitting import Split, chronological_split
@@ -69,18 +70,26 @@ class PipelineArtifacts:
     trials: List[Any] = field(default_factory=list)
     manifest: Optional[RunManifest] = None
 
-    # Validation-only metrics for architecture selection (never touches test).
-    validation_metrics: Dict[str, Metrics] = field(default_factory=dict)
-    # Trained deep models, so the best can be re-evaluated on test after selection.
-    deep_models: Dict[str, Any] = field(default_factory=dict, repr=False)
-
     # Scaled, selected matrices, kept for the modelling stages.
-    X_train_sel: np.ndarray = field(default=None, repr=False)  # type: ignore[assignment]
-    X_val_sel: np.ndarray = field(default=None, repr=False)  # type: ignore[assignment]
-    X_test_sel: np.ndarray = field(default=None, repr=False)  # type: ignore[assignment]
-    y_train_scaled: np.ndarray = field(default=None, repr=False)  # type: ignore[assignment]
-    y_val_scaled: np.ndarray = field(default=None, repr=False)  # type: ignore[assignment]
-    y_test_scaled: np.ndarray = field(default=None, repr=False)  # type: ignore[assignment]
+    X_train_sel: Optional[np.ndarray] = field(default=None, repr=False)
+    X_val_sel: Optional[np.ndarray] = field(default=None, repr=False)
+    X_test_sel: Optional[np.ndarray] = field(default=None, repr=False)
+    y_train_scaled: Optional[np.ndarray] = field(default=None, repr=False)
+    y_val_scaled: Optional[np.ndarray] = field(default=None, repr=False)
+    y_test_scaled: Optional[np.ndarray] = field(default=None, repr=False)
+
+    def require_matrices(self) -> Tuple[np.ndarray, ...]:
+        """Return the scaled, selected matrices, asserting the preparation stage has run.
+
+        The fields are optional because the dataclass is constructed incrementally, but every
+        modelling stage needs them. Without this guard, calling a stage out of order fails
+        somewhere deep in NumPy instead of saying what actually went wrong.
+        """
+        values = (self.X_train_sel, self.X_val_sel, self.X_test_sel,
+                  self.y_train_scaled, self.y_val_scaled, self.y_test_scaled)
+        if any(value is None for value in values):
+            raise NotFittedError("prepare() must run before the modelling stages")
+        return cast(Tuple[np.ndarray, ...], values)
 
     @property
     def comparison(self) -> pd.DataFrame:
@@ -149,8 +158,9 @@ def prepare(config: Optional[Config] = None,
 
 def run_baseline_stage(artifacts: PipelineArtifacts) -> PipelineArtifacts:
     """Fit the reference models and score them on the test block."""
+    X_train, _, X_test, y_train, _, _ = artifacts.require_matrices()
     predictions = run_baselines(
-        artifacts.X_train_sel, artifacts.y_train_scaled, artifacts.X_test_sel,
+        X_train, y_train, X_test,
         artifacts.split.X_test, artifacts.preprocessor.target_transformer, artifacts.config,
     )
     actual = artifacts.split.y_test.to_numpy(dtype=float)
@@ -161,30 +171,35 @@ def run_baseline_stage(artifacts: PipelineArtifacts) -> PipelineArtifacts:
 
 
 def run_deep_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineArtifacts:
-    """Window the data and train every configured architecture.
+    """Window the data, train every configured architecture, and score them.
 
-    Each architecture is evaluated on the **validation** block only. Test predictions are
-    deferred to :func:`run_tuning_stage` so that architecture and hyperparameter decisions
-    never see the test set.
+    Baseline metrics are recomputed on the windowed test rows so that every model in the final
+    table is scored on an identical set of timestamps.
     """
     from energy_forecast.models.architectures import Hyperparameters, build_model, set_seeds, train
 
     config = artifacts.config
     set_seeds(config)
 
+    X_train, X_val, X_test, y_train, y_val, y_test = artifacts.require_matrices()
     sequences = build_sequence_data(
-        artifacts.X_train_sel, artifacts.X_val_sel, artifacts.X_test_sel,
-        artifacts.y_train_scaled, artifacts.y_val_scaled, artifacts.y_test_scaled,
+        X_train, X_val, X_test, y_train, y_val, y_test,
         artifacts.split, artifacts.X.index, int(config.sequences["lookback"]),
     )
     artifacts.sequences = sequences
+    actual = artifacts.test_actual
+
+    # Re-score the baselines on the common window so the comparison is like for like.
+    artifacts.metrics = [
+        compute_metrics(actual, values[-len(actual):], name)
+        for name, values in artifacts.predictions.items()
+    ]
 
     defaults = config.training["defaults"]
     params = Hyperparameters(units=int(defaults["units"]), dropout=float(defaults["dropout"]),
                              learning_rate=float(defaults["learning_rate"]),
                              batch_size=int(config.training["batch_size"]))
     transformer = artifacts.preprocessor.target_transformer
-    val_actual = transformer.inverse(sequences.y_val)
 
     for architecture in config.training["architectures"]:
         logger.info("training %s", architecture)
@@ -195,26 +210,18 @@ def run_deep_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineAr
                         early_stopping_patience=int(config.training["early_stopping_patience"]),
                         reduce_lr_patience=int(config.training["reduce_lr_patience"]),
                         verbose=verbose)
+        predicted = transformer.inverse(model.predict(sequences.X_test, verbose=0).ravel())
 
-        val_prediction = transformer.inverse(
-            model.predict(sequences.X_val, verbose=0).ravel())
-
-        artifacts.validation_metrics[architecture] = compute_metrics(
-            val_actual, val_prediction, architecture)
         artifacts.histories[architecture] = history
-        artifacts.deep_models[architecture] = model
-        logger.info("%s val MAE %.2f Wh", architecture,
-                    artifacts.validation_metrics[architecture].mae)
+        artifacts.predictions[architecture] = predicted
+        artifacts.metrics.append(compute_metrics(actual, predicted, architecture))
+        logger.info("%s scored: MAE %.2f Wh", architecture, artifacts.metrics[-1].mae)
 
     return artifacts
 
 
 def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineArtifacts:
-    """Select the best architecture from validation, tune it, then score everything on test.
-
-    Architecture selection and hyperparameter search use validation metrics only.
-    The test block is evaluated exactly once, after all modelling decisions are final.
-    """
+    """Random-search the best recurrent architecture, then re-score it on the test block."""
     from energy_forecast.models.architectures import Hyperparameters, build_model, save_model, train
     from energy_forecast.training.tuning import random_search
 
@@ -225,16 +232,13 @@ def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> Pipeline
     if artifacts.sequences is None:
         raise RuntimeError("run_deep_stage must run before run_tuning_stage")
 
-    # ── Select architecture from VALIDATION metrics (never test). ──
-    if not artifacts.validation_metrics:
-        raise RuntimeError("validation metrics are unavailable; run_deep_stage first")
-
-    architecture = min(
-        artifacts.validation_metrics,
-        key=lambda name: artifacts.validation_metrics[name].mae,
-    )
-    logger.info("tuning %s (best val MAE %.2f Wh)", architecture,
-                artifacts.validation_metrics[architecture].mae)
+    table = artifacts.comparison
+    candidates = [m for m in table.index if m in config.training["architectures"]]
+    if not candidates:
+        logger.warning("no deep model to tune; skipping")
+        return artifacts
+    architecture = table.loc[candidates, "mae"].idxmin()
+    logger.info("tuning %s", architecture)
 
     trials = random_search(architecture, artifacts.sequences,
                            artifacts.preprocessor.target_transformer, config)
@@ -256,29 +260,15 @@ def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> Pipeline
                     verbose=verbose)
 
     label = f"{architecture}_tuned"
-    artifacts.histories[label] = history
-    artifacts.deep_models[label] = model
-
-    # ── Final test evaluation: score everything on test ONCE. ──
-    actual = artifacts.test_actual
     transformer = artifacts.preprocessor.target_transformer
+    predicted = transformer.inverse(model.predict(artifacts.sequences.X_test, verbose=0).ravel())
 
-    # Re-score baselines on the windowed test rows so every model covers the same timestamps.
-    artifacts.metrics = [
-        compute_metrics(actual, values[-len(actual):], name)
-        for name, values in artifacts.predictions.items()
-    ]
-
-    # Score each default deep architecture on test.
-    for arch_name, arch_model in artifacts.deep_models.items():
-        predicted = transformer.inverse(
-            arch_model.predict(artifacts.sequences.X_test, verbose=0).ravel())
-        artifacts.predictions[arch_name] = predicted
-        artifacts.metrics.append(compute_metrics(actual, predicted, arch_name))
-        logger.info("%s test MAE %.2f Wh", arch_name, artifacts.metrics[-1].mae)
+    artifacts.histories[label] = history
+    artifacts.predictions[label] = predicted
+    artifacts.metrics.append(compute_metrics(artifacts.test_actual, predicted, label))
 
     models_dir = config.output_dir("models_dir")
-    save_model(model, models_dir / "best_deep_model.keras")
+    save_model(model, models_dir / "best_model.keras")
     artifacts.preprocessor.save(models_dir / "preprocessor.joblib")
 
     # The feature order is part of the model contract: inference must slice the scaled matrix

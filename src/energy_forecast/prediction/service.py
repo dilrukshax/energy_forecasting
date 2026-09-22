@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,7 @@ from energy_forecast.training.sequences import make_sequences
 
 logger = get_logger(__name__)
 
-MODEL_FILENAME = "best_deep_model.keras"
+MODEL_FILENAME = "best_model.keras"
 PREPROCESSOR_FILENAME = "preprocessor.joblib"
 FEATURES_FILENAME = "selected_features.json"
 
@@ -47,9 +47,9 @@ class ForecastService:
     """
 
     config: Config
-    model: object
+    model: Any
     preprocessor: Preprocessor
-    selected_features: list
+    selected_features: List[str]
 
     @classmethod
     def load(cls, config: Optional[Config] = None,
@@ -114,9 +114,9 @@ class ForecastService:
         selected = scaled[:, positions]
 
         lookback = int(self.config.sequences["lookback"])
-        if len(selected) < lookback:
+        if len(selected) <= lookback:
             raise DataValidationError(
-                f"need at least {lookback} feature rows to form a window; "
+                f"need more than {lookback} feature rows to form a window; "
                 f"got {len(selected)}. Supply more history."
             )
 
@@ -124,7 +124,7 @@ class ForecastService:
         predicted = self.preprocessor.target_transformer.inverse(
             self.model.predict(windows, verbose=0).ravel())
 
-        index = X.index[lookback - 1:]
+        index = X.index[lookback:]
         logger.info("scored %s timestamps (%s rows consumed as history)",
                     len(predicted), len(frame) - len(predicted))
         return pd.Series(predicted, index=index, name="predicted_wh")

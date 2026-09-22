@@ -7,7 +7,7 @@ name = "energy-forecast"
 version = "0.1.0"
 description = "Multivariate time-series forecasting of household appliance energy consumption"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
@@ -39,7 +39,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "D"]
@@ -49,6 +49,7 @@ ignore = ["D203", "D213"]
 "tests/*" = ["D"]
 
 [tool.mypy]
-python_version = "3.9"
+# mypy dropped support for checking against 3.9, and the package targets 3.10+.
+python_version = "3.10"
 ignore_missing_imports = true
 warn_unused_ignores = true

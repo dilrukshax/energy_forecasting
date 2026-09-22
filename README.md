@@ -110,7 +110,7 @@ pip install -e ".[deep,dev]"       # package + TensorFlow + test/lint tooling
 pip install -e .
 ```
 
-Requires Python 3.9+. `matplotlib>=3.9` is a hard requirement.
+Requires Python 3.10+. `matplotlib>=3.9` is a hard requirement.
 
 ## Usage
 
