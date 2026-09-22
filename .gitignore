@@ -1,10 +1,35 @@
-.venv/
 __pycache__/
-*.pyc
-.ipynb_checkpoints/
-rerun*/
-.DS_Store
-*.log
-data/processed/
+*.py[cod]
+.venv/
+venv/
 .env
-.env.*
+
+# Build artefacts
+build/
+dist/
+*.egg-info/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Data: raw inputs are tracked (small, and the assessment ships with them);
+# everything derived is reproducible from `make all` and is not.
+data/processed/*
+!data/processed/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+
+# Model artefacts and generated figures
+models/*
+!models/.gitkeep
+reports/figures/*
+!reports/figures/.gitkeep
+reports/metrics.json
+reports/run.log
+
+# Experiment manifests are generated; keep the directory, not the runs.
+experiments/*
+!experiments/.gitkeep

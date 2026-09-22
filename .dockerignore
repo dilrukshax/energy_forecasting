@@ -1,0 +1,21 @@
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Data and artefacts are mounted at run time, never baked into the image.
+data/
+models/
+reports/
+experiments/
+notebooks/
+docs/
+
+Dockerfile
+.dockerignore

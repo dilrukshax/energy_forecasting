@@ -1,0 +1,93 @@
+# Single source of truth for every tunable in the pipeline.
+# Nothing in src/ hardcodes a path, a hyper-parameter or a split fraction.
+
+project:
+  name: appliance-energy-forecast
+  random_state: 42
+
+data:
+  raw_path: data/raw/energy_data_set.csv
+  processed_dir: data/processed
+  timestamp_column: date
+  target: Appliances
+  frequency: 10min
+  # Columns dropped on load, with the reason recorded for the audit trail.
+  drop_columns:
+    rv1: "random noise column from the source study; identical to rv2"
+    rv2: "random noise column from the source study; identical to rv1"
+  # Interpolation is capped so a long sensor dropout is never fabricated.
+  max_interpolation_steps: 6
+
+features:
+  # Forecast horizon in steps. 1 step = 10 minutes.
+  horizon: 1
+  # Lags of the target, in steps. Chosen from the autocorrelation analysis:
+  # dense short lags, plus the daily (144) and weekly (1008) seasonal bumps.
+  target_lags: [1, 2, 3, 4, 5, 6, 12, 18, 36, 144, 1008]
+  rolling_windows:
+    1h: 6
+    3h: 18
+    6h: 36
+    24h: 144
+  # Belgian public holidays inside the observed period (the house is in Belgium).
+  holidays:
+    - 2016-01-01
+    - 2016-03-27
+    - 2016-03-28
+    - 2016-05-01
+    - 2016-05-05
+    - 2016-05-15
+    - 2016-05-16
+
+split:
+  test_fraction: 0.20
+  # Validation is carved off the END of the training block, chronologically.
+  validation_fraction: 0.10
+
+preprocessing:
+  # Winsorising fences, as a multiple of the IQR. Fitted on training rows only.
+  winsorise_iqr_multiplier: 3.0
+  # The target is log1p-transformed before standardisation to tame a skew of ~3.4.
+  target_log_transform: true
+
+selection:
+  n_features_rfe: 30
+  top_k_importance: 30
+  top_k_correlation: 30
+  # A feature is kept if at least this many of the three methods vote for it.
+  min_votes: 2
+
+sequences:
+  lookback: 36  # 6 hours of history per window
+
+training:
+  epochs: 60
+  batch_size: 64
+  early_stopping_patience: 8
+  reduce_lr_patience: 4
+  architectures: [lstm, gru, cnn_lstm]
+  defaults:
+    units: 64
+    dropout: 0.2
+    learning_rate: 0.001
+
+tuning:
+  enabled: true
+  n_trials: 8
+  epochs: 40
+  early_stopping_patience: 6
+  search_space:
+    units: [32, 64, 96]
+    dropout: [0.1, 0.2, 0.3]
+    learning_rate: [0.0003, 0.001, 0.003]
+    batch_size: [32, 64, 128]
+    optimizer: [adam, rmsprop]
+
+outputs:
+  models_dir: models
+  reports_dir: reports
+  figures_dir: reports/figures
+  metrics_file: reports/metrics.json
+  # Per-run manifests accumulate here: provenance (git commit, data hash, config digest),
+  # metrics and trials, one directory per run. `energy-forecast runs` compares them.
+  experiments_dir: experiments

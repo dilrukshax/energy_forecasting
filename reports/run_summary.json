@@ -1,7 +1,0 @@
-{
-  "best_model": "Random forest",
-  "best_MAE_Wh": 23.509,
-  "best_RMSE_Wh": 57.755,
-  "persistence_MAE_Wh": 25.678,
-  "total_runtime_seconds": 436.1241006250002
-}
