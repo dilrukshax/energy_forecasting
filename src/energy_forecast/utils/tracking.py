@@ -24,9 +24,9 @@ import json
 import platform
 import subprocess
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from energy_forecast.config import Config, project_root
 from energy_forecast.utils.logging import get_logger
@@ -54,20 +54,20 @@ def config_digest(config: Config) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _config_payload(config: Config) -> Dict[str, Any]:
+def _config_payload(config: Config) -> dict[str, Any]:
     """Return the configuration as a plain nested dictionary."""
     return {field_name: getattr(config, field_name)
             for field_name in Config.__dataclass_fields__}
 
 
-def git_state() -> Dict[str, Optional[str]]:
+def git_state() -> dict[str, str | None]:
     """Return the current commit and whether the working tree has uncommitted changes.
 
     Degrades gracefully: outside a git checkout, or without git installed, the fields are
     ``None`` rather than an exception. A run that cannot be traced to a commit is still worth
     recording - it just has to say so.
     """
-    def run(*args: str) -> Optional[str]:
+    def run(*args: str) -> str | None:
         try:
             return subprocess.check_output(args, cwd=project_root(),
                                            stderr=subprocess.DEVNULL, text=True).strip()
@@ -83,9 +83,9 @@ def git_state() -> Dict[str, Optional[str]]:
     }
 
 
-def environment() -> Dict[str, str]:
+def environment() -> dict[str, str]:
     """Record the library versions a result depends on."""
-    versions: Dict[str, str] = {
+    versions: dict[str, str] = {
         "python": platform.python_version(),
         "platform": platform.platform(),
     }
@@ -107,23 +107,23 @@ class RunManifest:
     config_digest: str
     data_digest: str
     data_path: str
-    git: Dict[str, Optional[str]] = field(default_factory=dict)
-    environment: Dict[str, str] = field(default_factory=dict)
-    config: Dict[str, Any] = field(default_factory=dict)
-    data_quality: Dict[str, Any] = field(default_factory=dict)
-    selected_features: List[str] = field(default_factory=list)
-    metrics: List[Dict[str, Any]] = field(default_factory=list)
-    trials: List[Dict[str, Any]] = field(default_factory=list)
-    best_model: Optional[str] = None
-    finished_at: Optional[str] = None
-    notes: Optional[str] = None
+    git: dict[str, str | None] = field(default_factory=dict)
+    environment: dict[str, str] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
+    data_quality: dict[str, Any] = field(default_factory=dict)
+    selected_features: list[str] = field(default_factory=list)
+    metrics: list[dict[str, Any]] = field(default_factory=list)
+    trials: list[dict[str, Any]] = field(default_factory=list)
+    best_model: str | None = None
+    finished_at: str | None = None
+    notes: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation."""
         return asdict(self)
 
 
-def new_run(config: Config, notes: Optional[str] = None) -> RunManifest:
+def new_run(config: Config, notes: str | None = None) -> RunManifest:
     """Open a manifest for a run that is about to start.
 
     Args:
@@ -132,8 +132,9 @@ def new_run(config: Config, notes: Optional[str] = None) -> RunManifest:
 
     Returns:
         A :class:`RunManifest` with the provenance fields populated.
+
     """
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     data_path = config.raw_path
     manifest = RunManifest(
         run_id=started.strftime("%Y%m%dT%H%M%SZ"),
@@ -159,7 +160,7 @@ def save_run(manifest: RunManifest, config: Config) -> Path:
     the per-run directories keep the history. Falls back to the reports directory when no
     experiments directory is configured.
     """
-    manifest.finished_at = datetime.now(timezone.utc).isoformat()
+    manifest.finished_at = datetime.now(UTC).isoformat()
 
     base = config.outputs.get("experiments_dir") or config.outputs["reports_dir"]
     runs_dir = config.path(base) / "runs"
@@ -178,7 +179,7 @@ def save_run(manifest: RunManifest, config: Config) -> Path:
     return path
 
 
-def compare_runs(base_dir: Path, metric: str = "mae") -> "Any":
+def compare_runs(base_dir: Path, metric: str = "mae") -> Any:
     """Return a table of every recorded run, best first.
 
     The point of accumulating manifests: "is the retrain better than what is deployed?" should

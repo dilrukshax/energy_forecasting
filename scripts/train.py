@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     save_figure(plot_metric_comparison(artifacts.comparison),
                 figures_dir / "metric_comparison.png")
 
-    best = artifacts.comparison.index[0]
+    best = artifacts.selected_model or artifacts.comparison.index[0]
     save_figure(plot_residual_diagnostics(actual, artifacts.predictions[best][-len(actual):],
                                           best),
                 figures_dir / "residual_diagnostics.png")
@@ -84,11 +84,16 @@ def main(argv: list[str] | None = None) -> int:
     write_report(artifacts.metrics, actual, artifacts.predictions,
                  config.path(config.outputs["metrics_file"]),
                  extra={"data_quality": artifacts.quality.to_dict(),
-                        "selected_features": artifacts.selection.selected})
+                        "selected_features": artifacts.selection.selected,
+                        "trials": [trial.to_dict() for trial in artifacts.trials],
+                        "validation_metrics": {
+                            name: metric.to_dict()
+                            for name, metric in artifacts.validation_metrics.items()}},
+                 selected_model=artifacts.selected_model)
 
     print(artifacts.comparison.round(3).to_string())
     print()
-    print(summarise(artifacts.metrics, actual))
+    print(summarise(artifacts.metrics, actual, artifacts.selected_model))
     return 0
 
 

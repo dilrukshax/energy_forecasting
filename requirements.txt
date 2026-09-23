@@ -1,29 +1,30 @@
 # Pinned runtime environment.
 #
 # `pip install -e .` resolves the same dependencies from pyproject.toml with looser bounds;
-# this file pins the exact versions the pipeline was developed and tested against, which is
-# what a reproducible environment needs.
+# this file pins the exact versions used for this assessment run.
 #
-# Versions below were verified by running the test suite and `energy-forecast train --skip-deep`.
+# Versions below were verified by the test suite and the executed report notebook.
 
-numpy==2.2.2
-pandas==2.2.3
-matplotlib==3.10.7          # >=3.9 required: boxplot `tick_labels`
-scikit-learn==1.5.2
+numpy==2.4.6
+pandas==3.0.6
+pyarrow==25.0.1
+matplotlib==3.11.2          # >=3.9 required: boxplot `tick_labels`
+seaborn==0.13.2
+scikit-learn==1.9.1
 pyyaml==6.0.3
-joblib==1.5.2
-click==8.3.0
+joblib==1.6.0
+click==8.5.0
 
-# Deep learning. Not pinned to an exact build: the correct wheel depends on your Python
-# version and on whether you want the CPU or GPU package. Any 2.16+ release exposes the
-# Keras 3 API this package uses.
-tensorflow>=2.16
+tensorflow==2.21.0
 
 # Development and testing.
-pytest==9.0.0
-ruff>=0.4
-mypy>=1.8
+pytest==9.1.1
+ruff==0.16.8
+mypy==2.3.1
 
-# Only needed to open the report notebook.
-notebook>=7.0
-ipykernel>=6.0
+# Used to execute and open the report notebook. The Notebook UI follows a compatible major
+# version range; the analysis environment itself uses the exact pins above and below.
+nbclient==0.11.0
+nbformat==5.11.1
+ipykernel==7.3.0
+notebook>=7.0,<8

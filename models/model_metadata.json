@@ -1,0 +1,5 @@
+{
+  "name": "RandomForest",
+  "kind": "sklearn",
+  "validation_mae_wh": 25.414152910692934
+}

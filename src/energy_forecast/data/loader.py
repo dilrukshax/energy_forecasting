@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -33,10 +32,10 @@ class DataQualityReport:
     duplicate_timestamps: int
     missing_timestamps: int
     missing_cells: int
-    interpolated_cells: int
-    longest_constant_runs: Dict[str, int]
+    filled_sensor_cells: int
+    longest_constant_runs: dict[str, int]
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         """Return a JSON-serialisable representation."""
         return {
             "n_rows": self.n_rows,
@@ -45,12 +44,12 @@ class DataQualityReport:
             "duplicate_timestamps": self.duplicate_timestamps,
             "missing_timestamps": self.missing_timestamps,
             "missing_cells": self.missing_cells,
-            "interpolated_cells": self.interpolated_cells,
+            "filled_sensor_cells": self.filled_sensor_cells,
             "longest_constant_runs": self.longest_constant_runs,
         }
 
 
-def load_raw(config: Config, path: Optional[Path] = None) -> pd.DataFrame:
+def load_raw(config: Config, path: Path | None = None) -> pd.DataFrame:
     """Read the raw CSV into a time-indexed frame.
 
     Args:
@@ -63,6 +62,7 @@ def load_raw(config: Config, path: Optional[Path] = None) -> pd.DataFrame:
 
     Raises:
         DataValidationError: if the target or timestamp column is absent.
+
     """
     source = path or config.raw_path
     timestamp_col = config.data["timestamp_column"]
@@ -97,22 +97,22 @@ def longest_constant_run(series: pd.Series) -> int:
 
 
 def enforce_regular_grid(frame: pd.DataFrame, config: Config) -> tuple[pd.DataFrame, int, int]:
-    """Reindex onto a complete time grid and interpolate short gaps.
+    """Reindex onto a complete time grid and forward-fill short sensor gaps.
 
     Every lag and rolling feature assumes a fixed step size. A timestamp that is simply absent
     from the file is invisible to ``isna()`` but silently corrupts those features, so the grid is
     enforced explicitly rather than assumed.
 
-    Interpolation is capped at ``data.max_interpolation_steps`` consecutive steps: bridging a
-    short dropout is reasonable, inventing an hour of behaviour is not. Anything longer stays
-    NaN and is dropped when the design matrix is built.
+    Sensor forward fill is capped at ``data.max_forward_fill_steps`` consecutive steps. The
+    target is never filled, because a missing observation is not a training label.
 
     Args:
         frame: Time-indexed frame.
         config: Loaded configuration.
 
     Returns:
-        Tuple of (regularised frame, timestamps inserted, cells filled by interpolation).
+        Tuple of (regularised frame, timestamps inserted, sensor cells forward-filled).
+
     """
     grid = pd.date_range(frame.index.min(), frame.index.max(), freq=config.frequency)
     inserted = len(grid) - len(frame.index.intersection(grid))
@@ -121,11 +121,14 @@ def enforce_regular_grid(frame: pd.DataFrame, config: Config) -> tuple[pd.DataFr
     regular.index.name = frame.index.name
 
     before = int(regular.isna().sum().sum())
-    limit = int(config.data.get("max_interpolation_steps", 6))
-    regular = regular.ffill(limit=limit)
+    limit = int(config.data.get("max_forward_fill_steps", 6))
+    # Never invent target labels. Missing sensor readings can use the most recent observation,
+    # but a missing appliance reading must stay missing and be excluded from training.
+    sensor_columns = regular.columns.drop(config.target)
+    regular.loc[:, sensor_columns] = regular.loc[:, sensor_columns].ffill(limit=limit)
     after = int(regular.isna().sum().sum())
 
-    logger.info("grid enforcement: %s timestamps inserted, %s cells interpolated",
+    logger.info("grid enforcement: %s timestamps inserted, %s sensor cells forward-filled",
                 inserted, before - after)
     return regular, inserted, before - after
 
@@ -141,8 +144,9 @@ def validate(frame: pd.DataFrame, config: Config, strict: bool = True) -> None:
     Raises:
         DataValidationError: in strict mode, on duplicate timestamps, a non-monotonic index,
             an irregular step size or a target that is entirely missing.
+
     """
-    problems: List[str] = []
+    problems: list[str] = []
 
     if frame.index.duplicated().any():
         problems.append(f"{int(frame.index.duplicated().sum())} duplicate timestamps")
@@ -164,20 +168,23 @@ def validate(frame: pd.DataFrame, config: Config, strict: bool = True) -> None:
         logger.warning("data validation: %s", message)
 
 
-def build_dataset(config: Config, path: Optional[Path] = None
+def build_dataset(config: Config, path: Path | None = None
                   ) -> tuple[pd.DataFrame, DataQualityReport]:
     """Run the full load -> regularise -> validate sequence.
 
     Returns:
         Tuple of (analysis-ready frame, quality report).
+
     """
     raw = load_raw(config, path)
     duplicates = int(raw.index.duplicated().sum())
+    if duplicates:
+        raise DataValidationError(f"{duplicates} duplicate timestamps in raw data")
     grid = pd.date_range(raw.index.min(), raw.index.max(), freq=config.frequency)
     missing_timestamps = len(grid.difference(raw.index))
     missing_cells = int(raw.isna().sum().sum())
 
-    frame, _, interpolated = enforce_regular_grid(raw, config)
+    frame, _, filled = enforce_regular_grid(raw, config)
     validate(frame, config, strict=True)
 
     runs = {col: longest_constant_run(frame[col]) for col in frame.columns}
@@ -190,7 +197,7 @@ def build_dataset(config: Config, path: Optional[Path] = None
         duplicate_timestamps=duplicates,
         missing_timestamps=missing_timestamps,
         missing_cells=missing_cells,
-        interpolated_cells=interpolated,
+        filled_sensor_cells=filled,
         longest_constant_runs=top_runs,
     )
     logger.info("dataset ready: %s rows, %s -> %s", report.n_rows, report.start, report.end)

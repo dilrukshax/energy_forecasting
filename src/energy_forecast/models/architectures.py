@@ -23,9 +23,10 @@ Architecture choices and the reasoning behind them:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -71,7 +72,7 @@ class Hyperparameters:
     batch_size: int = 64
     optimizer: str = "adam"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation."""
         return {"units": self.units, "dropout": self.dropout,
                 "learning_rate": self.learning_rate, "batch_size": self.batch_size,
@@ -88,7 +89,7 @@ def _optimizer(name: str, learning_rate: float):  # noqa: ANN202
     raise ValueError(f"unsupported optimizer: {name!r}")
 
 
-def build_lstm(input_shape: Tuple[int, int], params: Hyperparameters):  # noqa: ANN201
+def build_lstm(input_shape: tuple[int, int], params: Hyperparameters):  # noqa: ANN201
     """Two stacked LSTM layers with dropout and a small dense head."""
     keras = _keras()
     layers = keras.layers
@@ -105,7 +106,7 @@ def build_lstm(input_shape: Tuple[int, int], params: Hyperparameters):  # noqa: 
     return model
 
 
-def build_gru(input_shape: Tuple[int, int], params: Hyperparameters):  # noqa: ANN201
+def build_gru(input_shape: tuple[int, int], params: Hyperparameters):  # noqa: ANN201
     """GRU counterpart of the LSTM, same depth and head."""
     keras = _keras()
     layers = keras.layers
@@ -122,7 +123,7 @@ def build_gru(input_shape: Tuple[int, int], params: Hyperparameters):  # noqa: A
     return model
 
 
-def build_cnn_lstm(input_shape: Tuple[int, int], params: Hyperparameters):  # noqa: ANN201
+def build_cnn_lstm(input_shape: tuple[int, int], params: Hyperparameters):  # noqa: ANN201
     """Causal convolution over local shape, then an LSTM over the longer dependency."""
     keras = _keras()
     layers = keras.layers
@@ -141,18 +142,19 @@ def build_cnn_lstm(input_shape: Tuple[int, int], params: Hyperparameters):  # no
     return model
 
 
-ARCHITECTURES: Dict[str, Callable[[Tuple[int, int], Hyperparameters], Any]] = {
+ARCHITECTURES: dict[str, Callable[[tuple[int, int], Hyperparameters], Any]] = {
     "lstm": build_lstm,
     "gru": build_gru,
     "cnn_lstm": build_cnn_lstm,
 }
 
 
-def build_model(architecture: str, input_shape: Tuple[int, int], params: Hyperparameters):  # noqa: ANN201
+def build_model(architecture: str, input_shape: tuple[int, int], params: Hyperparameters):  # noqa: ANN201
     """Dispatch to an architecture by name.
 
     Raises:
         KeyError: if the architecture is not registered.
+
     """
     if architecture not in ARCHITECTURES:
         raise KeyError(f"unknown architecture {architecture!r}; "
@@ -173,9 +175,10 @@ def train(model, X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
 
     Returns:
         The Keras ``History``.
+
     """
     keras = _keras()
-    callbacks: List[Any] = [
+    callbacks: list[Any] = [
         keras.callbacks.EarlyStopping(monitor="val_loss", patience=early_stopping_patience,
                                       restore_best_weights=True),
         keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5,

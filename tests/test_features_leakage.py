@@ -64,7 +64,8 @@ def test_target_is_never_a_feature(synthetic_frame, synthetic_config):
 def test_no_feature_correlates_perfectly_with_the_target(synthetic_frame, synthetic_config):
     """A correlation of ~1.0 against the target is the signature of a leaked column."""
     X, y = FeatureBuilder(synthetic_config).build(synthetic_frame)
-    correlation = X.corrwith(y).abs()
+    variable_columns = X.columns[X.nunique(dropna=False) > 1]
+    correlation = X[variable_columns].corrwith(y).abs()
     suspicious = correlation[correlation > 0.999]
     assert suspicious.empty, f"suspiciously perfect correlations: {suspicious.to_dict()}"
 

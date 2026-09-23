@@ -8,9 +8,9 @@ applied unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
 
 import joblib
 import numpy as np
@@ -32,7 +32,7 @@ NEVER_CLIP = frozenset({
 })
 
 
-def iqr_bounds(series: pd.Series, multiplier: float = 1.5) -> Tuple[float, float]:
+def iqr_bounds(series: pd.Series, multiplier: float = 1.5) -> tuple[float, float]:
     """Tukey fences at ``multiplier`` times the interquartile range."""
     q1, q3 = series.quantile(0.25), series.quantile(0.75)
     iqr = q3 - q1
@@ -50,10 +50,10 @@ class Winsoriser:
     """
 
     multiplier: float = 3.0
-    bounds: Dict[str, Tuple[float, float]] = field(default_factory=dict)
-    columns: List[str] = field(default_factory=list)
+    bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
+    columns: list[str] = field(default_factory=list)
 
-    def fit(self, X: pd.DataFrame) -> "Winsoriser":
+    def fit(self, X: pd.DataFrame) -> Winsoriser:
         """Learn fences from the training rows."""
         self.columns = [
             c for c in X.columns
@@ -96,7 +96,7 @@ class TargetTransformer:
     log_transform: bool = True
     scaler: StandardScaler = field(default_factory=StandardScaler)
 
-    def fit(self, y: Iterable[float]) -> "TargetTransformer":
+    def fit(self, y: Iterable[float]) -> TargetTransformer:
         """Fit on training targets only."""
         values = self._to_log(np.asarray(y, dtype=float))
         self.scaler.fit(values.reshape(-1, 1))
@@ -132,15 +132,17 @@ class Preprocessor:
     winsoriser: Winsoriser = field(init=False)
     feature_scaler: StandardScaler = field(init=False)
     target_transformer: TargetTransformer = field(init=False)
-    feature_names: List[str] = field(default_factory=list)
+    feature_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        """Create the unfitted transformations from configuration."""
         settings = self.config.preprocessing
         self.winsoriser = Winsoriser(float(settings.get("winsorise_iqr_multiplier", 3.0)))
         self.feature_scaler = StandardScaler()
-        self.target_transformer = TargetTransformer(bool(settings.get("target_log_transform", True)))
+        self.target_transformer = TargetTransformer(
+            bool(settings.get("target_log_transform", True)))
 
-    def fit(self, X_train: pd.DataFrame, y_train: pd.Series) -> "Preprocessor":
+    def fit(self, X_train: pd.DataFrame, y_train: pd.Series) -> Preprocessor:
         """Fit every artefact on the training block."""
         self.feature_names = list(X_train.columns)
         self.feature_scaler.fit(self.winsoriser.fit_transform(X_train))
@@ -162,6 +164,6 @@ class Preprocessor:
         return path
 
     @staticmethod
-    def load(path: Path) -> "Preprocessor":
+    def load(path: Path) -> Preprocessor:
         """Restore a persisted preprocessor."""
         return joblib.load(path)

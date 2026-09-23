@@ -20,8 +20,7 @@ asserting the past does not move.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
-from typing import Dict, List, Tuple
+from enum import StrEnum
 
 import numpy as np
 import pandas as pd
@@ -36,14 +35,14 @@ INDOOR_TEMPERATURE = ["T1", "T2", "T3", "T4", "T5", "T7", "T8", "T9"]
 INDOOR_HUMIDITY = ["RH_1", "RH_2", "RH_3", "RH_4", "RH_5", "RH_7", "RH_8", "RH_9"]
 
 
-class Availability(str, Enum):
+class Availability(StrEnum):
     """Whether a feature can be computed at serving time, and from what."""
 
     KNOWN_IN_ADVANCE = "known_in_advance"
     LAGGED_OBSERVATION = "lagged_observation"
 
 
-class Family(str, Enum):
+class Family(StrEnum):
     """Grouping used for reporting and for the feature audit."""
 
     EXOGENOUS = "exogenous"
@@ -66,6 +65,7 @@ class FeatureSpec:
         min_lag: Smallest number of steps between the feature's newest input and the row it
             describes. Must be >= the horizon for any observed quantity.
         description: Why the feature exists, for the model card.
+
     """
 
     name: str
@@ -80,16 +80,18 @@ class FeatureBuilder:
 
     Args:
         config: Loaded configuration. Lags, rolling windows and holidays all come from it.
+
     """
 
     def __init__(self, config: Config) -> None:
+        """Store the configuration and initialise the feature provenance list."""
         self.config = config
         self.target = config.target
         self.horizon = int(config.features.get("horizon", 1))
-        self.target_lags: List[int] = list(config.features["target_lags"])
-        self.rolling_windows: Dict[str, int] = dict(config.features["rolling_windows"])
+        self.target_lags: list[int] = list(config.features["target_lags"])
+        self.rolling_windows: dict[str, int] = dict(config.features["rolling_windows"])
         self.holidays = pd.to_datetime(list(config.features.get("holidays", [])))
-        self.specs: List[FeatureSpec] = []
+        self.specs: list[FeatureSpec] = []
 
     # -- internals ------------------------------------------------------------------------
     def _record(self, name: str, family: Family, availability: Availability,
@@ -107,14 +109,17 @@ class FeatureBuilder:
         return series.shift(self.horizon)
 
     # -- public API -----------------------------------------------------------------------
-    def build(self, frame: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
+    def build(self, frame: pd.DataFrame, require_target: bool = True
+              ) -> tuple[pd.DataFrame, pd.Series]:
         """Construct the design matrix and the aligned target.
 
         Args:
             frame: Regularised, time-indexed frame containing the target and the sensors.
+            require_target: Require a known target at every returned row during training.
 
         Returns:
             Tuple of (X, y) sharing an index, with warm-up rows containing NaN dropped.
+
         """
         self.specs = []
         features = pd.DataFrame(index=frame.index)
@@ -129,7 +134,11 @@ class FeatureBuilder:
         self._add_domain(features, frame)
         self._add_interactions(features, frame)
 
-        combined = features.join(frame[self.target].rename("__target__")).dropna()
+        # Serving may include a final timestamp whose target has not yet been observed.
+        # Only training requires the target at the prediction timestamp.
+        combined = features.join(frame[self.target].rename("__target__"))
+        combined = combined.dropna() if require_target else combined.dropna(
+            subset=features.columns)
         X = combined.drop(columns="__target__")
         y = combined["__target__"].rename(self.target)
 
@@ -138,7 +147,7 @@ class FeatureBuilder:
         return X, y
 
     # -- feature families -------------------------------------------------------------------
-    def _add_exogenous(self, out: pd.DataFrame, frame: pd.DataFrame, columns: List[str]) -> None:
+    def _add_exogenous(self, out: pd.DataFrame, frame: pd.DataFrame, columns: list[str]) -> None:
         """Sensor readings, lagged by the horizon.
 
         The sensors are lagged rather than used at time t because at prediction time the current
@@ -163,7 +172,7 @@ class FeatureBuilder:
 
     def _add_rolling(self, out: pd.DataFrame, frame: pd.DataFrame,
                      target_history: pd.Series) -> None:
-        """Rolling statistics over strictly past target values.
+        """Compute rolling statistics over strictly past target values.
 
         ``target_history`` is already shifted, so a window of width w ends at t-horizon and can
         never include the value being predicted. This is the single most common place temporal
@@ -266,7 +275,8 @@ class FeatureBuilder:
             register("T_indoor_mean", frame[available_t].shift(h).mean(axis=1),
                      "mean indoor temperature across rooms")
             register("T_indoor_range",
-                     frame[available_t].shift(h).max(axis=1) - frame[available_t].shift(h).min(axis=1),
+                     (frame[available_t].shift(h).max(axis=1)
+                      - frame[available_t].shift(h).min(axis=1)),
                      "spread between the warmest and coolest room")
         if available_rh:
             register("RH_indoor_mean", frame[available_rh].shift(h).mean(axis=1),
@@ -306,8 +316,8 @@ class FeatureBuilder:
         } for spec in self.specs]).set_index("feature")
 
 
-def build_features(frame: pd.DataFrame, config: Config) -> Tuple[pd.DataFrame, pd.Series]:
-    """Convenience wrapper around :class:`FeatureBuilder`.
+def build_features(frame: pd.DataFrame, config: Config) -> tuple[pd.DataFrame, pd.Series]:
+    """Build features with a fresh :class:`FeatureBuilder`.
 
     Args:
         frame: Regularised, time-indexed frame.
@@ -315,5 +325,6 @@ def build_features(frame: pd.DataFrame, config: Config) -> Tuple[pd.DataFrame, p
 
     Returns:
         Tuple of (X, y).
+
     """
     return FeatureBuilder(config).build(frame)

@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     audit = builder.audit()
 
     if args.audit_only:
-        print(audit.groupby(["family", "availability"]).size().to_string())
+        print(audit.to_string())
         return 0
 
     processed = config.path(config.data["processed_dir"])

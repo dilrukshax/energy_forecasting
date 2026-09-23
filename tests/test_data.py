@@ -5,7 +5,6 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from energy_forecast.exceptions import DataValidationError
 from energy_forecast.data import (
     build_dataset,
     enforce_regular_grid,
@@ -13,30 +12,32 @@ from energy_forecast.data import (
     longest_constant_run,
     validate,
 )
+from energy_forecast.exceptions import DataValidationError
 
 
 def test_enforce_regular_grid_fills_a_hole(synthetic_frame, synthetic_config):
-    """A missing timestamp is inserted and interpolated, not silently tolerated."""
+    """A missing timestamp is inserted, but its target is never invented."""
     punctured = synthetic_frame.drop(synthetic_frame.index[100:103])
     assert len(punctured) == len(synthetic_frame) - 3
 
-    repaired, inserted, interpolated = enforce_regular_grid(punctured, synthetic_config)
+    repaired, inserted, filled = enforce_regular_grid(punctured, synthetic_config)
 
     assert inserted == 3
-    assert interpolated > 0
+    assert filled > 0
     assert len(repaired) == len(synthetic_frame)
-    assert repaired.index.freq is None or True  # reindexed onto a complete grid
-    assert not repaired.isna().any().any()
+    assert repaired.index.equals(synthetic_frame.index)
+    assert repaired.loc[synthetic_frame.index[100:103], synthetic_config.target].isna().all()
+    assert not repaired.drop(columns=synthetic_config.target).isna().any().any()
 
 
 def test_long_gaps_are_not_fabricated(synthetic_frame, synthetic_config):
     """A dropout longer than the cap stays NaN rather than being invented."""
-    limit = int(synthetic_config.data["max_interpolation_steps"])
+    limit = int(synthetic_config.data["max_forward_fill_steps"])
     punctured = synthetic_frame.drop(synthetic_frame.index[200:200 + limit * 3])
 
     repaired, _, _ = enforce_regular_grid(punctured, synthetic_config)
 
-    assert repaired.isna().any().any(), "an over-long gap must not be fully interpolated"
+    assert repaired.isna().any().any(), "an over-long gap must not be fully filled"
 
 
 def test_validate_rejects_duplicate_timestamps(synthetic_frame, synthetic_config):

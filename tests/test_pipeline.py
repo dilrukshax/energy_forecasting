@@ -6,14 +6,16 @@ preprocessing and baseline logic is correct in seconds, without installing Tenso
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 from energy_forecast.config import Config, load_config
-from energy_forecast.exceptions import ConfigurationError
 from energy_forecast.evaluation.metrics import compute_metrics
-from energy_forecast.training.pipeline import prepare, run_baseline_stage
+from energy_forecast.exceptions import ConfigurationError
 from energy_forecast.features.selection import select_features
+from energy_forecast.training.pipeline import finalize_run, prepare, run_baseline_stage
 
 
 @pytest.fixture(scope="module")
@@ -70,8 +72,8 @@ def test_persistence_is_a_genuine_competitor(prepared):
 
 def test_selection_requires_a_majority(synthetic_frame, synthetic_config):
     """With an impossible vote threshold, selection must fail loudly rather than return junk."""
-    from energy_forecast.features import FeatureBuilder
     from energy_forecast.data.splitting import chronological_split
+    from energy_forecast.features import FeatureBuilder
 
     X, y = FeatureBuilder(synthetic_config).build(synthetic_frame)
     split = chronological_split(X, y, synthetic_config)
@@ -82,3 +84,72 @@ def test_selection_requires_a_majority(synthetic_frame, synthetic_config):
     with pytest.raises(ConfigurationError, match="retained nothing"):
         select_features(split.X_train, np.log1p(split.y_train.to_numpy()),
                         split.y_train, impossible)
+
+
+@pytest.mark.slow
+def test_saved_model_is_chosen_on_validation_and_serves_aligned_rows(prepared, tmp_path):
+    """Test scores must not choose the model, and the saved model must score new timestamps."""
+    import copy
+    import json
+
+    import pandas as pd
+
+    from energy_forecast.prediction import ForecastService
+
+    artifacts = copy.copy(prepared)
+    artifacts.predictions = {}
+    artifacts.metrics = []
+    artifacts.validation_metrics = {}
+    artifacts.fitted_models = {}
+    artifacts = run_baseline_stage(artifacts)
+    assert artifacts.comparison.index[0] != "Persistence"
+    artifacts.validation_metrics["Persistence"] = replace(
+        artifacts.validation_metrics["Persistence"], mae=0.0)
+
+    scoped = Config(**{**{k: getattr(prepared.config, k) for k in Config.__dataclass_fields__},
+                       "outputs": {**prepared.config.outputs,
+                                   "models_dir": str(tmp_path / "models"),
+                                   "experiments_dir": str(tmp_path / "experiments")}})
+    artifacts.config = scoped
+    finalize_run(artifacts)
+    assert artifacts.selected_model == "Persistence"
+    metadata = json.loads((tmp_path / "models" / "model_metadata.json").read_text())
+    assert metadata["kind"] == "persistence"
+
+    service = ForecastService.load(scoped)
+    future = artifacts.frame.index[-1] + pd.Timedelta(scoped.frequency)
+    future_frame = pd.concat([
+        artifacts.frame,
+        pd.DataFrame(np.nan, index=pd.DatetimeIndex([future]),
+                     columns=artifacts.frame.columns),
+    ])
+    predicted = service.predict_frame(future_frame)
+    assert predicted.index[-1] == future
+    assert predicted.loc[future] == artifacts.frame[scoped.target].iloc[-1]
+
+
+@pytest.mark.slow
+def test_windowed_serving_uses_the_last_row_of_each_window(prepared):
+    """A Keras prediction must be indexed by its actual target timestamp."""
+    import pandas as pd
+
+    from energy_forecast.features import FeatureBuilder
+    from energy_forecast.prediction import ForecastService
+
+    class DummyModel:
+        def predict(self, windows, verbose=0):
+            return np.zeros((len(windows), 1))
+
+    history = prepared.frame.tail(1100)
+    future = history.index[-1] + pd.Timedelta(prepared.config.frequency)
+    frame = pd.concat([
+        history,
+        pd.DataFrame(np.nan, index=pd.DatetimeIndex([future]), columns=history.columns),
+    ])
+    X, _ = FeatureBuilder(prepared.config).build(frame, require_target=False)
+    service = ForecastService(prepared.config, DummyModel(), prepared.preprocessor,
+                              prepared.selection.selected, "keras")
+    result = service.predict_frame(frame)
+    expected = X.index[int(prepared.config.sequences["lookback"]) - 1:]
+    assert result.index.equals(expected)
+    assert result.index[-1] == future

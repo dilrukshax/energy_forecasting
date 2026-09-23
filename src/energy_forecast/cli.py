@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import functools
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 import click
 
@@ -26,7 +26,7 @@ from energy_forecast.utils.logging import configure_logging, get_logger
 logger = get_logger(__name__)
 
 
-def handle_errors(func: "Callable[..., None]") -> "Callable[..., None]":
+def handle_errors(func: Callable[..., None]) -> Callable[..., None]:
     """Turn a package error into a clean CLI message instead of a traceback.
 
     Anything this package raises deliberately is a condition the user can act on, so it is
@@ -63,7 +63,7 @@ def cli() -> None:
 @data_option
 @verbose_option
 @handle_errors
-def validate(config_path: Optional[Path], data_path: Optional[Path], debug: bool) -> None:
+def validate(config_path: Path | None, data_path: Path | None, debug: bool) -> None:
     """Load the dataset and print its quality report."""
     configure_logging(logging.DEBUG if debug else logging.INFO)
     from energy_forecast.data import build_dataset
@@ -78,7 +78,7 @@ def validate(config_path: Optional[Path], data_path: Optional[Path], debug: bool
 @data_option
 @verbose_option
 @handle_errors
-def audit(config_path: Optional[Path], data_path: Optional[Path], debug: bool) -> None:
+def audit(config_path: Path | None, data_path: Path | None, debug: bool) -> None:
     """Print the serving-time availability audit for every engineered feature."""
     configure_logging(logging.DEBUG if debug else logging.INFO)
     from energy_forecast.data import build_dataset
@@ -90,7 +90,8 @@ def audit(config_path: Optional[Path], data_path: Optional[Path], debug: bool) -
     builder.build(frame)
     table = builder.audit()
 
-    click.echo(table.groupby(["family", "availability"]).size().to_string())
+    click.echo(table.to_string())
+    click.echo("\n" + table.groupby(["family", "availability"]).size().to_string())
     click.echo(f"\ntotal features: {len(table)}")
     click.echo(f"minimum lag among observed features: "
                f"{table.loc[table.availability == 'lagged_observation', 'min_lag_steps'].min()}")
@@ -103,7 +104,7 @@ def audit(config_path: Optional[Path], data_path: Optional[Path], debug: bool) -
 @click.option("--skip-deep", is_flag=True, help="Baselines only; does not require TensorFlow.")
 @click.option("--keras-verbose", type=int, default=0, help="Keras fit verbosity.")
 @handle_errors
-def train(config_path: Optional[Path], data_path: Optional[Path], debug: bool,
+def train(config_path: Path | None, data_path: Path | None, debug: bool,
           skip_deep: bool, keras_verbose: int) -> None:
     """Run the pipeline end to end and write metrics and figures."""
     config = load_config(config_path)
@@ -126,7 +127,7 @@ def train(config_path: Optional[Path], data_path: Optional[Path], debug: bool,
     ev.save_figure(ev.plot_metric_comparison(artifacts.comparison),
                    figures_dir / "metric_comparison.png")
 
-    best = artifacts.comparison.index[0]
+    best = artifacts.selected_model or artifacts.comparison.index[0]
     ev.save_figure(
         ev.plot_residual_diagnostics(actual, artifacts.predictions[best][-len(actual):], best),
         figures_dir / "residual_diagnostics.png")
@@ -138,10 +139,14 @@ def train(config_path: Optional[Path], data_path: Optional[Path], debug: bool,
                     config.path(config.outputs["metrics_file"]),
                     extra={"data_quality": artifacts.quality.to_dict(),
                            "selected_features": artifacts.selection.selected,
-                           "trials": [t.to_dict() for t in artifacts.trials]})
+                           "trials": [t.to_dict() for t in artifacts.trials],
+                           "validation_metrics": {
+                               name: metric.to_dict()
+                               for name, metric in artifacts.validation_metrics.items()}},
+                    selected_model=artifacts.selected_model)
 
     click.echo("\n" + artifacts.comparison.round(3).to_string())
-    click.echo("\n" + ev.summarise(artifacts.metrics, actual))
+    click.echo("\n" + ev.summarise(artifacts.metrics, actual, artifacts.selected_model))
 
 
 @cli.command()
@@ -152,8 +157,8 @@ def train(config_path: Optional[Path], data_path: Optional[Path], debug: bool,
 @click.option("--output", "output_path", type=click.Path(path_type=Path), default=None,
               help="Where to write the predictions. Printed to stdout when omitted.")
 @handle_errors
-def predict(config_path: Optional[Path], debug: bool, input_path: Path,
-            output_path: Optional[Path]) -> None:
+def predict(config_path: Path | None, debug: bool, input_path: Path,
+            output_path: Path | None) -> None:
     """Score new data using the saved model and preprocessor."""
     configure_logging(logging.DEBUG if debug else logging.INFO)
     from energy_forecast.prediction.service import ForecastService
@@ -171,7 +176,7 @@ def predict(config_path: Optional[Path], debug: bool, input_path: Path,
 @config_option
 @click.option("--metric", default="mae", help="Metric to rank runs by.")
 @handle_errors
-def runs(config_path: Optional[Path], metric: str) -> None:
+def runs(config_path: Path | None, metric: str) -> None:
     """List every recorded run, best first."""
     from energy_forecast.utils.tracking import compare_runs
 

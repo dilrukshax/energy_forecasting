@@ -4,9 +4,11 @@ One-step-ahead (10-minute) forecasting of household appliance energy consumption
 Appliance Energy Prediction dataset, built as an installable Python package with a CLI, a test
 suite and a config-driven pipeline rather than as a single notebook.
 
-Submitted for the *Multivariate Time-Series Prediction Using Deep Learning* assessment. The
+Prepared for the *Multivariate Time-Series Prediction Using Deep Learning* assessment. The
 brief allows all tasks in one notebook; this goes further and structures the work the way it
 would be structured if it had to be retrained on a schedule.
+
+See [the requirement audit](docs/ASSESSMENT_AUDIT.md) for a line-by-line check against the brief.
 
 ---
 
@@ -15,7 +17,7 @@ would be structured if it had to be retrained on a schedule.
 ```
 .
 ├── configs/
-│   └── config.yaml              # every tunable: paths, lags, windows, split, search space
+│   └── config.yaml              # main settings: paths, lags, windows, split, search space
 ├── data/
 │   ├── raw/                     # immutable input; never written to
 │   ├── interim/
@@ -79,23 +81,22 @@ would be structured if it had to be retrained on a schedule.
   package, each subpackage owns one concern and re-exports its public surface from
   `__init__.py`, so callers write `from energy_forecast.features import FeatureBuilder` without
   depending on which module it happens to live in.
-- **Config over constants.** A run is fully described by its config file, so a result can be
-  reproduced months later by pointing at the same YAML. Nothing in `src/` hardcodes a path, a
-  lag or a split fraction.
+- **Config for the main experiment choices.** The YAML records paths, lag grid, split fractions,
+  training budget and search space. The run manifest also records the data hash, code revision
+  and library versions needed to interpret a result.
 - **Lazy TensorFlow import.** `models/architectures.py` imports Keras inside its functions.
   Everything else - data validation, feature engineering, splitting, preprocessing, baselines -
   runs and is tested without TensorFlow installed, so CI proves the correctness-critical logic
   in seconds.
-- **Notebook as a consumer, not a source.** `notebooks/01_report.ipynb` imports from the
-  package. It cannot drift away from what actually runs, and it contains narrative rather than
-  a second copy of the pipeline.
-- **One interface for every model.** Persistence, scikit-learn regressors and Keras networks all
-  implement the `Forecaster` ABC in `models/base.py`, so `training/pipeline.py` and
-  `prediction/service.py` contain no branching on model type. Adding a model means implementing
-  three methods, not editing four modules.
-- **Training and serving share one code path.** `prediction/service.py` rebuilds features with the same
-  `FeatureBuilder` and the same fitted `Preprocessor` the run used, which makes training/serving
-  skew structurally impossible rather than merely avoided by care.
+- **Notebook as a consumer.** `notebooks/01_report.ipynb` imports from the package rather than
+  reimplementing the pipeline. Re-execute it after code changes so the cached outputs and prose
+  match the current run.
+- **One interface for reference models.** Persistence and scikit-learn regressors implement the
+  `Forecaster` contract in `models/base.py`; the pipeline also trains Keras architectures and
+  saves the validation-selected model with its serving type in `model_metadata.json`.
+- **Training and serving share feature transformations.** `prediction/service.py` rebuilds
+  features with the same `FeatureBuilder` and loads the fitted `Preprocessor`. It handles flat
+  baseline models and windowed Keras models according to saved metadata.
 
 ---
 
@@ -105,12 +106,11 @@ would be structured if it had to be retrained on a schedule.
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-pip install -e ".[deep,dev]"       # package + TensorFlow + test/lint tooling
-# or, without the deep models:
-pip install -e .
+pip install -r requirements.txt    # versions used for this assessment run
+pip install -e . --no-deps         # install the package and CLI
 ```
 
-Requires Python 3.10+. `matplotlib>=3.9` is a hard requirement.
+Requires Python 3.11+ for the pinned environment. `matplotlib>=3.9` is a hard requirement.
 
 ## Usage
 
@@ -159,7 +159,8 @@ energy-forecast train --skip-deep
 energy-forecast train --config configs/config.yaml --keras-verbose 1
 ```
 
-A full run writes `models/best_model.keras`, `models/preprocessor.joblib`,
+A full run writes `models/model_metadata.json`, a validation-selected model (`.joblib` for a
+scikit-learn baseline or `.keras` for a deep model), `models/preprocessor.joblib`,
 `reports/metrics.json`, `reports/run.log` and the figures under `reports/figures/`.
 
 ---
@@ -172,8 +173,8 @@ sensor reading from the timestamp it is predicting, because at serving time that
 not been collected yet.
 
 **Evaluation.** The final 20% of the timeline is held out and is never used to fit a model, a
-scaler, a feature selector or a hyper-parameter. Metrics are reported in Wh, after inverting
-every transform.
+scaler, a feature selector, an architecture or a hyper-parameter. The model for serving is chosen
+by validation MAE. Test metrics are reported in Wh, after inverting every transform.
 
 ## Guarding against temporal leakage
 
@@ -204,7 +205,7 @@ improvement over the persistence baseline is treated as a leakage alarm, not a t
 
 | Stage | Module | Notes |
 |---|---|---|
-| Load & validate | `data` | Enforces a gap-free 10-minute grid; interpolation capped at one hour so a long dropout is never fabricated. Flags frozen sensors via constant-run length. |
+| Load & validate | `data` | Enforces a gap-free 10-minute grid; forward-fills short sensor gaps from past readings only. Missing target values remain missing. Flags frozen sensors via constant-run length. |
 | Feature engineering | `features` | Calendar (incl. cyclical), target lags chosen from the ACF, rolling mean/std/min/max over 1/3/6/24 h, differences, temperature×humidity interactions, Belgian public holidays. |
 | Split | `splitting` | 80/20 chronological, with validation carved off the end of the training block. |
 | Preprocessing | `preprocessing` | Predictors winsorised at 3×IQR; target `log1p` then standardised. Target outliers are kept — the evening spikes are the thing being predicted. |
@@ -230,10 +231,8 @@ the notebook — both are generated from the run that actually executed.
 
 Every run writes `experiments/runs/<run_id>/manifest.json` recording the git commit and dirty flag,
 a SHA-256 of the raw data, a digest and full copy of the config, library versions, the selected
-features and every metric. Two runs sharing a config digest and a data digest should produce the
-same result; if they do not, the difference is in the code. `energy-forecast runs` ranks the
-history, which is what makes "is this retrain better than what is deployed?" a question you
-answer by reading files rather than by remembering.
+features and every metric. These fields make runs comparable; TensorFlow execution can still
+vary slightly across hardware and library builds. `energy-forecast runs` ranks the history.
 
 See `docs/MODEL_CARD.md` for intended use, limitations, ethical considerations and the full
 leakage-control table.
@@ -247,7 +246,8 @@ leakage-control table.
 - The 1008-step weekly lag costs the first seven days of data as warm-up.
 - Run manifests provide provenance and comparison, but there is no model *registry* and no
   automated drift alerting: the manifest is written and can be compared, yet nothing acts on the
-  comparison. A hosted tracker (MLflow, W&B) would slot in by replacing `tracking.py` alone.
+  comparison. The current model directory is replaced by each run, so save a copy before a new
+  run if you need rollback. A hosted tracker could address that gap.
 - No online serving. `prediction/service.py` is batch only; a REST endpoint (FastAPI in an
   `api/` package) would wrap `ForecastService` without changing it.
 

@@ -10,17 +10,17 @@ Selection happens on the **validation** block. The test block is scored once, af
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error
 
 from energy_forecast.config import Config
-from energy_forecast.utils.logging import get_logger
-from energy_forecast.models.architectures import Hyperparameters, build_model, train
 from energy_forecast.features.preprocessing import TargetTransformer
+from energy_forecast.models.architectures import Hyperparameters, build_model, train
 from energy_forecast.training.sequences import SequenceData
+from energy_forecast.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -34,13 +34,13 @@ class Trial:
     val_loss: float
     epochs: int
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a flat, JSON-serialisable record."""
         return {**self.params.to_dict(), "val_mae_wh": self.val_mae,
                 "val_loss": self.val_loss, "epochs": self.epochs}
 
 
-def sample_params(space: Dict[str, List[Any]], rng: np.random.Generator) -> Hyperparameters:
+def sample_params(space: dict[str, list[Any]], rng: np.random.Generator) -> Hyperparameters:
     """Draw one configuration uniformly from the search space."""
     return Hyperparameters(
         units=int(rng.choice(space["units"])),
@@ -52,7 +52,7 @@ def sample_params(space: Dict[str, List[Any]], rng: np.random.Generator) -> Hype
 
 
 def random_search(architecture: str, data: SequenceData, transformer: TargetTransformer,
-                  config: Config) -> List[Trial]:
+                  config: Config) -> list[Trial]:
     """Evaluate ``tuning.n_trials`` random configurations on the validation block.
 
     Args:
@@ -63,6 +63,7 @@ def random_search(architecture: str, data: SequenceData, transformer: TargetTran
 
     Returns:
         Trials sorted best-first by validation MAE.
+
     """
     from energy_forecast.models.architectures import _keras
 
@@ -72,7 +73,7 @@ def random_search(architecture: str, data: SequenceData, transformer: TargetTran
     rng = np.random.default_rng(config.random_state)
     val_actual = transformer.inverse(data.y_val)
 
-    trials: List[Trial] = []
+    trials: list[Trial] = []
     for number in range(int(settings["n_trials"])):
         params = sample_params(space, rng)
         keras.backend.clear_session()
@@ -96,6 +97,6 @@ def random_search(architecture: str, data: SequenceData, transformer: TargetTran
     return sorted(trials, key=lambda t: t.val_mae)
 
 
-def trials_table(trials: List[Trial]) -> pd.DataFrame:
+def trials_table(trials: list[Trial]) -> pd.DataFrame:
     """Collect trials into a table, best first."""
     return pd.DataFrame([trial.to_dict() for trial in trials]).sort_values("val_mae_wh")

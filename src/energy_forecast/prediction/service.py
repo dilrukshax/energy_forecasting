@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -24,15 +25,15 @@ from energy_forecast.config import Config, load_config
 from energy_forecast.data import build_dataset
 from energy_forecast.exceptions import ArtifactError, DataValidationError
 from energy_forecast.features import FeatureBuilder
-from energy_forecast.utils.logging import get_logger
 from energy_forecast.features.preprocessing import Preprocessor
 from energy_forecast.training.sequences import make_sequences
+from energy_forecast.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-MODEL_FILENAME = "best_model.keras"
 PREPROCESSOR_FILENAME = "preprocessor.joblib"
 FEATURES_FILENAME = "selected_features.json"
+METADATA_FILENAME = "model_metadata.json"
 
 
 @dataclass
@@ -44,45 +45,63 @@ class ForecastService:
         model: The restored Keras model.
         preprocessor: The preprocessor fitted during training.
         selected_features: Feature names, in the order the model was trained on.
+
     """
 
     config: Config
     model: Any
     preprocessor: Preprocessor
-    selected_features: List[str]
+    selected_features: list[str]
+    model_kind: str = "keras"
 
     @classmethod
-    def load(cls, config: Optional[Config] = None,
-             models_dir: Optional[Path] = None) -> "ForecastService":
+    def load(cls, config: Config | None = None,
+             models_dir: Path | None = None) -> ForecastService:
         """Restore a service from the artefacts written by a training run.
 
         Raises:
             ArtifactError: if the model, the preprocessor or the feature list is missing.
+
         """
         import json
 
         config = config or load_config()
         directory = models_dir or config.path(config.outputs["models_dir"])
 
-        model_path = directory / MODEL_FILENAME
+        metadata_path = directory / METADATA_FILENAME
         preprocessor_path = directory / PREPROCESSOR_FILENAME
         features_path = directory / FEATURES_FILENAME
-
-        for path in (model_path, preprocessor_path, features_path):
+        for path in (metadata_path, preprocessor_path, features_path):
             if not path.exists():
                 raise ArtifactError(
                     f"missing artefact: {path}. Run `energy-forecast train` first."
                 )
 
-        from energy_forecast.models.architectures import load_model
-
+        with open(metadata_path, encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        kind = metadata["kind"]
+        if kind == "keras":
+            from energy_forecast.models.architectures import load_model
+            model_path = directory / "best_model.keras"
+            if not model_path.exists():
+                raise ArtifactError(f"missing model artefact: {model_path}")
+            model = load_model(model_path)
+        elif kind == "sklearn":
+            model_path = directory / "best_model.joblib"
+            if not model_path.exists():
+                raise ArtifactError(f"missing model artefact: {model_path}")
+            model = joblib.load(model_path)
+        elif kind == "persistence":
+            model = None
+        else:
+            raise ArtifactError(f"unsupported saved model kind: {kind!r}")
         with open(features_path, encoding="utf-8") as handle:
             selected = json.load(handle)
 
         logger.info("loaded model and preprocessor from %s", directory)
-        return cls(config=config, model=load_model(model_path),
+        return cls(config=config, model=model,
                    preprocessor=Preprocessor.load(preprocessor_path),
-                   selected_features=selected)
+                   selected_features=selected, model_kind=kind)
 
     def predict_frame(self, frame: pd.DataFrame) -> pd.Series:
         """Score a raw, time-indexed frame.
@@ -99,9 +118,10 @@ class ForecastService:
 
         Raises:
             DataValidationError: if too little history is supplied to form a single window.
+
         """
         builder = FeatureBuilder(self.config)
-        X, _ = builder.build(frame)
+        X, _ = builder.build(frame, require_target=False)
 
         missing = [name for name in self.selected_features if name not in X.columns]
         if missing:
@@ -113,10 +133,17 @@ class ForecastService:
         positions = [self.preprocessor.feature_names.index(n) for n in self.selected_features]
         selected = scaled[:, positions]
 
+        if self.model_kind == "persistence":
+            return pd.Series(X["app_lag1"].to_numpy(dtype=float), index=X.index,
+                             name="predicted_wh")
+        if self.model_kind == "sklearn":
+            predicted = self.preprocessor.target_transformer.inverse(self.model.predict(selected))
+            return pd.Series(predicted, index=X.index, name="predicted_wh")
+
         lookback = int(self.config.sequences["lookback"])
-        if len(selected) <= lookback:
+        if len(selected) < lookback:
             raise DataValidationError(
-                f"need more than {lookback} feature rows to form a window; "
+                f"need at least {lookback} feature rows to form a window; "
                 f"got {len(selected)}. Supply more history."
             )
 
@@ -124,12 +151,12 @@ class ForecastService:
         predicted = self.preprocessor.target_transformer.inverse(
             self.model.predict(windows, verbose=0).ravel())
 
-        index = X.index[lookback:]
+        index = X.index[lookback - 1:]
         logger.info("scored %s timestamps (%s rows consumed as history)",
                     len(predicted), len(frame) - len(predicted))
         return pd.Series(predicted, index=index, name="predicted_wh")
 
-    def predict_csv(self, csv_path: Path, output_path: Optional[Path] = None) -> pd.Series:
+    def predict_csv(self, csv_path: Path, output_path: Path | None = None) -> pd.Series:
         """Score a raw CSV in the same format as the training data.
 
         Args:
@@ -138,6 +165,7 @@ class ForecastService:
 
         Returns:
             Predicted consumption in Wh.
+
         """
         frame, _ = build_dataset(self.config, csv_path)
         predictions = self.predict_frame(frame)

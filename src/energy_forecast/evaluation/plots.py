@@ -7,15 +7,16 @@ without retraining anything, and so the notebook can call exactly the code the b
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any
 
 import matplotlib
 import numpy as np
 import pandas as pd
 
-from energy_forecast.utils.logging import get_logger
 from energy_forecast.evaluation.metrics import Metrics, error_by_level, metrics_table
+from energy_forecast.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -43,7 +44,7 @@ def save_figure(fig, path: Path) -> Path:
 
 def plot_actual_vs_predicted(index: pd.DatetimeIndex, actual: np.ndarray,
                              predictions: Mapping[str, np.ndarray],
-                             title: str = "Actual vs predicted") -> "matplotlib.figure.Figure":
+                             title: str = "Actual vs predicted") -> matplotlib.figure.Figure:
     """Overlay predictions on the observed series."""
     plt = _plt()
     fig, ax = plt.subplots(figsize=(13, 4))
@@ -59,7 +60,7 @@ def plot_actual_vs_predicted(index: pd.DatetimeIndex, actual: np.ndarray,
 
 
 def plot_residual_diagnostics(actual: np.ndarray, predicted: np.ndarray,
-                              model_name: str) -> "matplotlib.figure.Figure":
+                              model_name: str) -> matplotlib.figure.Figure:
     """Four-panel residual analysis.
 
     Read left to right: does the model track the level; does error grow with the prediction;
@@ -101,11 +102,11 @@ def plot_residual_diagnostics(actual: np.ndarray, predicted: np.ndarray,
     return fig
 
 
-def plot_metric_comparison(table: pd.DataFrame) -> "matplotlib.figure.Figure":
+def plot_metric_comparison(table: pd.DataFrame) -> matplotlib.figure.Figure:
     """Bar chart of each metric across models."""
     plt = _plt()
     fig, ax = plt.subplots(1, 4, figsize=(15, 3.4))
-    for axis, metric in zip(ax, ["mae", "rmse", "mape", "r2"]):
+    for axis, metric in zip(ax, ["mae", "rmse", "mape", "r2"], strict=True):
         axis.barh(table.index, table[metric].values, color="tab:blue")
         axis.set_title(metric.upper())
         axis.tick_params(labelsize=8)
@@ -115,12 +116,12 @@ def plot_metric_comparison(table: pd.DataFrame) -> "matplotlib.figure.Figure":
     return fig
 
 
-def plot_training_history(histories: Mapping[str, Any]) -> "matplotlib.figure.Figure":
+def plot_training_history(histories: Mapping[str, Any]) -> matplotlib.figure.Figure:
     """Training and validation loss curves, one panel per model."""
     plt = _plt()
     fig, ax = plt.subplots(1, max(len(histories), 1), figsize=(5 * len(histories), 3.6),
                            squeeze=False)
-    for axis, (name, history) in zip(ax[0], histories.items()):
+    for axis, (name, history) in zip(ax[0], histories.items(), strict=False):
         axis.plot(history.history["loss"], label="train")
         axis.plot(history.history["val_loss"], label="validation")
         axis.set_title(f"{name} - MSE loss")
@@ -131,22 +132,25 @@ def plot_training_history(histories: Mapping[str, Any]) -> "matplotlib.figure.Fi
     return fig
 
 
-def write_report(records: List[Metrics], actual: np.ndarray,
+def write_report(records: list[Metrics], actual: np.ndarray,
                  predictions: Mapping[str, np.ndarray], path: Path,
-                 extra: Optional[Dict[str, object]] = None) -> Path:
+                 extra: dict[str, object] | None = None,
+                 selected_model: str | None = None) -> Path:
     """Write the metrics report as JSON.
 
     A machine-readable report is what lets a scheduled retrain be compared against the model
     currently in production, rather than eyeballed from a notebook.
     """
     table = metrics_table(records)
-    best = table.index[0]
+    best = selected_model or table.index[0]
     baseline = table.loc["Persistence", "mae"] if "Persistence" in table.index else None
 
-    payload: Dict[str, object] = {
+    payload: dict[str, object] = {
         "models": [record.to_dict() for record in records],
         "best_model": best,
         "best_mae_wh": float(table.loc[best, "mae"]),
+        "selection_basis": "validation MAE" if selected_model else "test MAE",
+        "lowest_test_mae_model": str(table.index[0]),
         "test_mean_wh": float(np.mean(actual)),
     }
     if baseline is not None:
@@ -166,11 +170,13 @@ def write_report(records: List[Metrics], actual: np.ndarray,
     return path
 
 
-def summarise(records: Iterable[Metrics], actual: np.ndarray) -> str:
+def summarise(records: Iterable[Metrics], actual: np.ndarray,
+              selected_model: str | None = None) -> str:
     """Render a short human-readable summary of the run."""
     table = metrics_table(list(records))
-    best = table.index[0]
-    lines = [f"Best model on the test set: {best}",
+    best = selected_model or table.index[0]
+    lines = [f"Validation-selected model: {best}" if selected_model
+             else f"Lowest test MAE: {best}",
              f"  MAE  {table.loc[best, 'mae']:.2f} Wh",
              f"  RMSE {table.loc[best, 'rmse']:.2f} Wh",
              f"  MAPE {table.loc[best, 'mape']:.2f} %",

@@ -13,7 +13,6 @@ on it. All three are fitted on training rows only.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
 
 import numpy as np
 import pandas as pd
@@ -40,12 +39,13 @@ class SelectionResult:
         importances: Random-forest importance per feature, for reporting.
         indices: Positions of the selected features in the original column order, so an
             already-scaled array can be sliced without being rebuilt.
+
     """
 
-    selected: List[str]
+    selected: list[str]
     votes: pd.Series
     importances: pd.Series
-    indices: List[int]
+    indices: list[int]
 
     @property
     def table(self) -> pd.DataFrame:
@@ -70,6 +70,7 @@ def select_features(X_train: pd.DataFrame, y_train_scaled: np.ndarray,
 
     Returns:
         A :class:`SelectionResult`.
+
     """
     settings = config.selection
     random_state = config.random_state
@@ -85,7 +86,8 @@ def select_features(X_train: pd.DataFrame, y_train_scaled: np.ndarray,
     rfe.fit(X_train.values, y_train_scaled)
     rfe_keep = set(X_train.columns[rfe.support_])
 
-    correlation = X_train.corrwith(y_train_raw).abs()
+    variable_columns = X_train.columns[X_train.nunique(dropna=False) > 1]
+    correlation = X_train[variable_columns].corrwith(y_train_raw).abs()
 
     votes = pd.Series(0, index=X_train.columns, dtype=int)
     votes[importances.nlargest(int(settings["top_k_importance"])).index] += 1

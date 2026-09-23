@@ -1,5 +1,4 @@
-# Single source of truth for every tunable in the pipeline.
-# Nothing in src/ hardcodes a path, a hyper-parameter or a split fraction.
+# Main experiment settings. Some baseline and feature-engineering defaults live in code.
 
 project:
   name: appliance-energy-forecast
@@ -15,8 +14,8 @@ data:
   drop_columns:
     rv1: "random noise column from the source study; identical to rv2"
     rv2: "random noise column from the source study; identical to rv1"
-  # Interpolation is capped so a long sensor dropout is never fabricated.
-  max_interpolation_steps: 6
+  # Causal sensor forward fill is capped; target labels are never imputed.
+  max_forward_fill_steps: 6
 
 features:
   # Forecast horizon in steps. 1 step = 10 minutes.
@@ -61,7 +60,7 @@ sequences:
   lookback: 36  # 6 hours of history per window
 
 training:
-  epochs: 100
+  epochs: 60
   batch_size: 64
   early_stopping_patience: 10
   reduce_lr_patience: 5
@@ -73,8 +72,8 @@ training:
 
 tuning:
   enabled: true
-  n_trials: 24
-  epochs: 80
+  n_trials: 8
+  epochs: 40
   early_stopping_patience: 10
   search_space:
     units: [32, 64, 96, 128]

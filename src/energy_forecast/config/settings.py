@@ -7,9 +7,10 @@ what makes a result reproducible months later.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping
+from typing import Any
 
 import yaml
 
@@ -17,13 +18,11 @@ DEFAULT_CONFIG_PATH = Path("configs/config.yaml")
 
 
 def project_root() -> Path:
-    """Return the repository root, resolved relative to this file.
-
-    Keeps behaviour identical whether the code is invoked from the repo root, from
-    ``notebooks/`` or from an installed package. The index is
-    ``src/energy_forecast/config/settings.py`` -> four levels up.
-    """
-    return Path(__file__).resolve().parents[3]
+    """Find the project data/config root for a checkout or an installed container."""
+    for parent in (Path.cwd(), *Path.cwd().parents, *Path(__file__).resolve().parents):
+        if (parent / DEFAULT_CONFIG_PATH).is_file():
+            return parent
+    return Path.cwd()
 
 
 @dataclass(frozen=True)
@@ -34,16 +33,16 @@ class Config:
     repository root on access so callers never have to care about their working directory.
     """
 
-    project: Dict[str, Any] = field(default_factory=dict)
-    data: Dict[str, Any] = field(default_factory=dict)
-    features: Dict[str, Any] = field(default_factory=dict)
-    split: Dict[str, Any] = field(default_factory=dict)
-    preprocessing: Dict[str, Any] = field(default_factory=dict)
-    selection: Dict[str, Any] = field(default_factory=dict)
-    sequences: Dict[str, Any] = field(default_factory=dict)
-    training: Dict[str, Any] = field(default_factory=dict)
-    tuning: Dict[str, Any] = field(default_factory=dict)
-    outputs: Dict[str, Any] = field(default_factory=dict)
+    project: dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
+    features: dict[str, Any] = field(default_factory=dict)
+    split: dict[str, Any] = field(default_factory=dict)
+    preprocessing: dict[str, Any] = field(default_factory=dict)
+    selection: dict[str, Any] = field(default_factory=dict)
+    sequences: dict[str, Any] = field(default_factory=dict)
+    training: dict[str, Any] = field(default_factory=dict)
+    tuning: dict[str, Any] = field(default_factory=dict)
+    outputs: dict[str, Any] = field(default_factory=dict)
 
     # -- derived accessors ---------------------------------------------------------------
     @property
@@ -78,7 +77,7 @@ class Config:
         return directory
 
     def steps_per(self, unit: str) -> int:
-        """Number of sampling steps in ``hour``, ``day`` or ``week``."""
+        """Return the number of sampling steps in ``hour``, ``day`` or ``week``."""
         minutes = int(pd_offset_minutes(self.frequency))
         per_hour = 60 // minutes
         return {"hour": per_hour, "day": per_hour * 24, "week": per_hour * 24 * 7}[unit]
@@ -104,6 +103,7 @@ def load_config(path: Path | str | None = None) -> Config:
     Raises:
         FileNotFoundError: if the config file does not exist.
         KeyError: if a required top-level block is missing.
+
     """
     config_path = Path(path) if path else project_root() / DEFAULT_CONFIG_PATH
     if not config_path.is_file():
@@ -112,7 +112,7 @@ def load_config(path: Path | str | None = None) -> Config:
     with open(config_path, encoding="utf-8") as handle:
         payload: Mapping[str, Any] = yaml.safe_load(handle)
 
-    required: List[str] = ["project", "data", "features", "split", "preprocessing",
+    required: list[str] = ["project", "data", "features", "split", "preprocessing",
                            "selection", "sequences", "training", "outputs"]
     missing = [block for block in required if block not in payload]
     if missing:

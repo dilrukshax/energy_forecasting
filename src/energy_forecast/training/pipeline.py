@@ -13,22 +13,22 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 
-from energy_forecast.models.baselines import run_baselines
 from energy_forecast.config import Config, load_config
 from energy_forecast.data import DataQualityReport, build_dataset
-from energy_forecast.features import FeatureBuilder
-from energy_forecast.utils.logging import get_logger
-from energy_forecast.evaluation.metrics import Metrics, compute_metrics, metrics_table
-from energy_forecast.features.preprocessing import Preprocessor
-from energy_forecast.exceptions import NotFittedError
-from energy_forecast.features.selection import SelectionResult, select_features
-from energy_forecast.training.sequences import SequenceData, build_sequence_data
 from energy_forecast.data.splitting import Split, chronological_split
+from energy_forecast.evaluation.metrics import Metrics, compute_metrics, metrics_table
+from energy_forecast.exceptions import NotFittedError
+from energy_forecast.features import FeatureBuilder
+from energy_forecast.features.preprocessing import Preprocessor
+from energy_forecast.features.selection import SelectionResult, select_features
+from energy_forecast.models.baselines import run_baselines
+from energy_forecast.training.sequences import SequenceData, build_sequence_data
+from energy_forecast.utils.logging import get_logger
 from energy_forecast.utils.tracking import RunManifest, new_run, save_run
 
 logger = get_logger(__name__)
@@ -52,6 +52,7 @@ class PipelineArtifacts:
         metrics: One record per model.
         histories: Keras training histories, keyed by model name.
         trials: Hyper-parameter search records.
+
     """
 
     config: Config
@@ -63,22 +64,25 @@ class PipelineArtifacts:
     split: Split
     preprocessor: Preprocessor
     selection: SelectionResult
-    sequences: Optional[SequenceData] = None
-    predictions: Dict[str, np.ndarray] = field(default_factory=dict)
-    metrics: List[Metrics] = field(default_factory=list)
-    histories: Dict[str, Any] = field(default_factory=dict)
-    trials: List[Any] = field(default_factory=list)
-    manifest: Optional[RunManifest] = None
+    sequences: SequenceData | None = None
+    predictions: dict[str, np.ndarray] = field(default_factory=dict)
+    metrics: list[Metrics] = field(default_factory=list)
+    validation_metrics: dict[str, Metrics] = field(default_factory=dict)
+    fitted_models: dict[str, Any] = field(default_factory=dict, repr=False)
+    selected_model: str | None = None
+    histories: dict[str, Any] = field(default_factory=dict)
+    trials: list[Any] = field(default_factory=list)
+    manifest: RunManifest | None = None
 
     # Scaled, selected matrices, kept for the modelling stages.
-    X_train_sel: Optional[np.ndarray] = field(default=None, repr=False)
-    X_val_sel: Optional[np.ndarray] = field(default=None, repr=False)
-    X_test_sel: Optional[np.ndarray] = field(default=None, repr=False)
-    y_train_scaled: Optional[np.ndarray] = field(default=None, repr=False)
-    y_val_scaled: Optional[np.ndarray] = field(default=None, repr=False)
-    y_test_scaled: Optional[np.ndarray] = field(default=None, repr=False)
+    X_train_sel: np.ndarray | None = field(default=None, repr=False)
+    X_val_sel: np.ndarray | None = field(default=None, repr=False)
+    X_test_sel: np.ndarray | None = field(default=None, repr=False)
+    y_train_scaled: np.ndarray | None = field(default=None, repr=False)
+    y_val_scaled: np.ndarray | None = field(default=None, repr=False)
+    y_test_scaled: np.ndarray | None = field(default=None, repr=False)
 
-    def require_matrices(self) -> Tuple[np.ndarray, ...]:
+    def require_matrices(self) -> tuple[np.ndarray, ...]:
         """Return the scaled, selected matrices, asserting the preparation stage has run.
 
         The fields are optional because the dataclass is constructed incrementally, but every
@@ -89,7 +93,7 @@ class PipelineArtifacts:
                   self.y_train_scaled, self.y_val_scaled, self.y_test_scaled)
         if any(value is None for value in values):
             raise NotFittedError("prepare() must run before the modelling stages")
-        return cast(Tuple[np.ndarray, ...], values)
+        return cast(tuple[np.ndarray, ...], values)
 
     @property
     def comparison(self) -> pd.DataFrame:
@@ -104,8 +108,8 @@ class PipelineArtifacts:
         return self.split.y_test.to_numpy(dtype=float)
 
 
-def prepare(config: Optional[Config] = None,
-            data_path: Optional[Path] = None) -> PipelineArtifacts:
+def prepare(config: Config | None = None,
+            data_path: Path | None = None) -> PipelineArtifacts:
     """Run every stage up to and including feature selection.
 
     This is the deterministic, TensorFlow-free part of the pipeline: load, validate, engineer,
@@ -117,6 +121,7 @@ def prepare(config: Optional[Config] = None,
 
     Returns:
         Populated :class:`PipelineArtifacts`.
+
     """
     config = config or load_config()
     manifest = new_run(config)
@@ -158,15 +163,20 @@ def prepare(config: Optional[Config] = None,
 
 def run_baseline_stage(artifacts: PipelineArtifacts) -> PipelineArtifacts:
     """Fit the reference models and score them on the test block."""
-    X_train, _, X_test, y_train, _, _ = artifacts.require_matrices()
-    predictions = run_baselines(
-        X_train, y_train, X_test,
-        artifacts.split.X_test, artifacts.preprocessor.target_transformer, artifacts.config,
+    X_train, X_val, X_test, y_train, _, _ = artifacts.require_matrices()
+    val_predictions, test_predictions, fitted = run_baselines(
+        X_train, y_train, X_val, X_test,
+        artifacts.split.X_val, artifacts.split.X_test,
+        artifacts.preprocessor.target_transformer, artifacts.config,
     )
     actual = artifacts.split.y_test.to_numpy(dtype=float)
-    for name, values in predictions.items():
+    val_actual = artifacts.split.y_val.to_numpy(dtype=float)
+    for name, values in test_predictions.items():
         artifacts.predictions[name] = values
         artifacts.metrics.append(compute_metrics(actual, values, name))
+        artifacts.validation_metrics[name] = compute_metrics(
+            val_actual, val_predictions[name], name)
+        artifacts.fitted_models[name] = fitted[name]
     return artifacts
 
 
@@ -210,11 +220,15 @@ def run_deep_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineAr
                         early_stopping_patience=int(config.training["early_stopping_patience"]),
                         reduce_lr_patience=int(config.training["reduce_lr_patience"]),
                         verbose=verbose)
+        val_predicted = transformer.inverse(model.predict(sequences.X_val, verbose=0).ravel())
         predicted = transformer.inverse(model.predict(sequences.X_test, verbose=0).ravel())
 
         artifacts.histories[architecture] = history
         artifacts.predictions[architecture] = predicted
         artifacts.metrics.append(compute_metrics(actual, predicted, architecture))
+        artifacts.validation_metrics[architecture] = compute_metrics(
+            transformer.inverse(sequences.y_val), val_predicted, architecture)
+        artifacts.fitted_models[architecture] = model
         logger.info("%s scored: MAE %.2f Wh", architecture, artifacts.metrics[-1].mae)
 
     return artifacts
@@ -222,7 +236,7 @@ def run_deep_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineAr
 
 def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> PipelineArtifacts:
     """Random-search the best recurrent architecture, then re-score it on the test block."""
-    from energy_forecast.models.architectures import Hyperparameters, build_model, save_model, train
+    from energy_forecast.models.architectures import build_model, train
     from energy_forecast.training.tuning import random_search
 
     config = artifacts.config
@@ -232,12 +246,12 @@ def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> Pipeline
     if artifacts.sequences is None:
         raise RuntimeError("run_deep_stage must run before run_tuning_stage")
 
-    table = artifacts.comparison
-    candidates = [m for m in table.index if m in config.training["architectures"]]
+    candidates = [m for m in config.training["architectures"]
+                  if m in artifacts.validation_metrics]
     if not candidates:
         logger.warning("no deep model to tune; skipping")
         return artifacts
-    architecture = table.loc[candidates, "mae"].idxmin()
+    architecture = min(candidates, key=lambda name: artifacts.validation_metrics[name].mae)
     logger.info("tuning %s", architecture)
 
     trials = random_search(architecture, artifacts.sequences,
@@ -262,24 +276,57 @@ def run_tuning_stage(artifacts: PipelineArtifacts, verbose: int = 0) -> Pipeline
     label = f"{architecture}_tuned"
     transformer = artifacts.preprocessor.target_transformer
     predicted = transformer.inverse(model.predict(artifacts.sequences.X_test, verbose=0).ravel())
+    val_predicted = transformer.inverse(model.predict(artifacts.sequences.X_val, verbose=0).ravel())
 
     artifacts.histories[label] = history
     artifacts.predictions[label] = predicted
     artifacts.metrics.append(compute_metrics(artifacts.test_actual, predicted, label))
-
-    models_dir = config.output_dir("models_dir")
-    save_model(model, models_dir / "best_model.keras")
-    artifacts.preprocessor.save(models_dir / "preprocessor.joblib")
-
-    # The feature order is part of the model contract: inference must slice the scaled matrix
-    # in exactly the order training used, so it is persisted with the other artefacts.
-    with open(models_dir / "selected_features.json", "w", encoding="utf-8") as handle:
-        json.dump(artifacts.selection.selected, handle, indent=2)
+    artifacts.validation_metrics[label] = compute_metrics(
+        transformer.inverse(artifacts.sequences.y_val), val_predicted, label)
+    artifacts.fitted_models[label] = model
 
     return artifacts
 
 
-def run_all(config: Optional[Config] = None, data_path: Optional[Path] = None,
+def finalize_run(artifacts: PipelineArtifacts) -> PipelineArtifacts:
+    """Choose and persist the validation winner, then record all held-out results."""
+    if not artifacts.validation_metrics:
+        raise RuntimeError("no models have been evaluated on validation data")
+    chosen = min(artifacts.validation_metrics,
+                 key=lambda name: artifacts.validation_metrics[name].mae)
+    artifacts.selected_model = chosen
+    model = artifacts.fitted_models[chosen]
+    models_dir = artifacts.config.output_dir("models_dir")
+
+    from energy_forecast.models.base import PersistenceForecaster, SklearnForecaster
+
+    if isinstance(model, PersistenceForecaster):
+        kind = "persistence"
+    elif isinstance(model, SklearnForecaster):
+        kind = "sklearn"
+        model.save(models_dir / "best_model.joblib")
+    else:
+        kind = "keras"
+        from energy_forecast.models.architectures import save_model
+        save_model(model, models_dir / "best_model.keras")
+
+    artifacts.preprocessor.save(models_dir / "preprocessor.joblib")
+    (models_dir / "selected_features.json").write_text(
+        json.dumps(artifacts.selection.selected, indent=2), encoding="utf-8")
+    (models_dir / "model_metadata.json").write_text(
+        json.dumps({"name": chosen, "kind": kind,
+                    "validation_mae_wh": artifacts.validation_metrics[chosen].mae}, indent=2),
+        encoding="utf-8")
+
+    if artifacts.manifest is not None:
+        artifacts.manifest.metrics = [record.to_dict() for record in artifacts.metrics]
+        artifacts.manifest.trials = [trial.to_dict() for trial in artifacts.trials]
+        artifacts.manifest.best_model = chosen
+        save_run(artifacts.manifest, artifacts.config)
+    return artifacts
+
+
+def run_all(config: Config | None = None, data_path: Path | None = None,
             skip_deep: bool = False, verbose: int = 0) -> PipelineArtifacts:
     """Run the whole pipeline.
 
@@ -292,6 +339,7 @@ def run_all(config: Optional[Config] = None, data_path: Optional[Path] = None,
 
     Returns:
         Populated :class:`PipelineArtifacts`.
+
     """
     artifacts = run_baseline_stage(prepare(config, data_path))
     if not skip_deep:
@@ -300,10 +348,4 @@ def run_all(config: Optional[Config] = None, data_path: Optional[Path] = None,
     else:
         logger.info("skipping the deep-learning stages (skip_deep=True)")
 
-    if artifacts.manifest is not None:
-        artifacts.manifest.metrics = [record.to_dict() for record in artifacts.metrics]
-        artifacts.manifest.trials = [trial.to_dict() for trial in artifacts.trials]
-        artifacts.manifest.best_model = (artifacts.comparison.index[0]
-                                         if artifacts.metrics else None)
-        save_run(artifacts.manifest, artifacts.config)
-    return artifacts
+    return finalize_run(artifacts)

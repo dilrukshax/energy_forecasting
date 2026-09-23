@@ -13,14 +13,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from energy_forecast.exceptions import NotFittedError
-from energy_forecast.utils.logging import get_logger
 from energy_forecast.features.preprocessing import TargetTransformer
+from energy_forecast.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -34,17 +34,19 @@ class Forecaster(ABC):
 
     Attributes:
         name: Identifier used in metric tables, figures and the run manifest.
+
     """
 
     name: str = "forecaster"
 
-    def __init__(self, name: Optional[str] = None) -> None:
+    def __init__(self, name: str | None = None) -> None:
+        """Record the model name and mark it unfitted."""
         if name:
             self.name = name
         self._fitted = False
 
     @abstractmethod
-    def fit(self, X: Any, y: Any, **kwargs: Any) -> "Forecaster":
+    def fit(self, X: Any, y: Any, **kwargs: Any) -> Forecaster:
         """Fit on training data. Must set ``self._fitted``."""
 
     @abstractmethod
@@ -66,6 +68,7 @@ class Forecaster(ABC):
         raise NotImplementedError(f"{type(self).__name__} does not support saving")
 
     def __repr__(self) -> str:
+        """Show the model name and fit state for debugging."""
         return f"{type(self).__name__}(name={self.name!r}, fitted={self._fitted})"
 
 
@@ -78,15 +81,17 @@ class PersistenceForecaster(Forecaster):
 
     Args:
         lag_column: Column of the design matrix holding the one-step lag of the target.
+
     """
 
     name = "Persistence"
 
     def __init__(self, lag_column: str = "app_lag1") -> None:
+        """Record the lagged target column used for persistence."""
         super().__init__()
         self.lag_column = lag_column
 
-    def fit(self, X: pd.DataFrame, y: Any = None, **kwargs: Any) -> "PersistenceForecaster":
+    def fit(self, X: pd.DataFrame, y: Any = None, **kwargs: Any) -> PersistenceForecaster:
         """Nothing to learn; validates that the lag column exists."""
         if self.lag_column not in X.columns:
             raise KeyError(f"{self.lag_column!r} not in the design matrix")
@@ -109,14 +114,16 @@ class SklearnForecaster(Forecaster):
         estimator: Any fitted-or-unfitted scikit-learn regressor.
         transformer: Fitted target transformer, for the inverse.
         name: Label for reporting.
+
     """
 
     def __init__(self, estimator: Any, transformer: TargetTransformer, name: str) -> None:
+        """Wrap an estimator with a fitted target transformer."""
         super().__init__(name)
         self.estimator = estimator
         self.transformer = transformer
 
-    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs: Any) -> "SklearnForecaster":
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs: Any) -> SklearnForecaster:
         """Fit the wrapped estimator on targets already in model space."""
         self.estimator.fit(X, y)
         self._fitted = True
@@ -133,7 +140,7 @@ class SklearnForecaster(Forecaster):
         import joblib
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self.estimator, path)
+        joblib.dump(self.estimator, path, compress=3)
         return path
 
 
@@ -147,21 +154,29 @@ class KerasForecaster(Forecaster):
         model: A compiled Keras model.
         transformer: Fitted target transformer, for the inverse.
         name: Label for reporting.
+
     """
 
     def __init__(self, model: Any, transformer: TargetTransformer, name: str) -> None:
+        """Wrap a Keras model with a fitted target transformer."""
         super().__init__(name)
         self.model = model
         self.transformer = transformer
         self.history: Any = None
 
-    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs: Any) -> "KerasForecaster":
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs: Any) -> KerasForecaster:
         """Fit with early stopping.
+
+        Args:
+            X: Windowed training features.
+            y: Training targets in model space.
+            **kwargs: Training options listed below.
 
         Keyword Args:
             validation_data: ``(X_val, y_val)``, required.
             params: :class:`~energy_forecast.models.Hyperparameters`.
             epochs, early_stopping_patience, reduce_lr_patience, verbose: Passed through.
+
         """
         from energy_forecast.models.architectures import train
 

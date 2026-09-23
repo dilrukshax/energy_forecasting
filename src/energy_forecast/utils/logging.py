@@ -9,18 +9,18 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-7s | %(name)-28s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def configure_logging(level: int = logging.INFO, log_file: Optional[Path] = None) -> None:
+def configure_logging(level: int = logging.INFO, log_file: Path | None = None) -> None:
     """Configure root logging once, for the whole process.
 
     Args:
         level: Minimum level to emit.
         log_file: Optional file to mirror the stream handler into.
+
     """
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file is not None:

@@ -7,8 +7,8 @@ and returns Wh.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from typing import Dict, Iterable, List
 
 import numpy as np
 import pandas as pd
@@ -27,6 +27,7 @@ class Metrics:
             reported but not optimised.
         r2: Share of variance explained.
         n: Number of scored rows.
+
     """
 
     model: str
@@ -36,7 +37,7 @@ class Metrics:
     r2: float
     n: int
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         """Return a JSON-serialisable representation."""
         return asdict(self)
 
@@ -54,6 +55,7 @@ def compute_metrics(y_true: Iterable[float], y_pred: Iterable[float], model: str
 
     Raises:
         ValueError: if the inputs have different lengths.
+
     """
     actual = np.asarray(y_true, dtype=float)
     predicted = np.asarray(y_pred, dtype=float)
@@ -73,7 +75,7 @@ def compute_metrics(y_true: Iterable[float], y_pred: Iterable[float], model: str
     )
 
 
-def metrics_table(records: List[Metrics]) -> pd.DataFrame:
+def metrics_table(records: list[Metrics]) -> pd.DataFrame:
     """Collect metric records into a comparison table sorted by MAE."""
     frame = pd.DataFrame([record.to_dict() for record in records])
     if frame.empty:

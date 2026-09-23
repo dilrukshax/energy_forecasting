@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.DS_Store
 
 # Build artefacts
 build/
@@ -25,6 +26,11 @@ data/interim/*
 # Model artefacts and generated figures
 models/*
 !models/.gitkeep
+!models/best_model.keras
+!models/best_model.joblib
+!models/model_metadata.json
+!models/preprocessor.joblib
+!models/selected_features.json
 reports/figures/*
 !reports/figures/.gitkeep
 reports/metrics.json

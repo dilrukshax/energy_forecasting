@@ -18,6 +18,8 @@ Only the leaf modules import TensorFlow, and only inside the functions that need
 correctness-critical layers run and are tested without it.
 """
 
+from energy_forecast import evaluation
+from energy_forecast import evaluation as evaluate
 from energy_forecast.exceptions import (
     ArtifactError,
     ConfigurationError,
@@ -26,8 +28,6 @@ from energy_forecast.exceptions import (
     LeakageError,
     NotFittedError,
 )
-from energy_forecast import evaluation
-from energy_forecast import evaluation as evaluate
 
 __version__ = "0.1.0"
 

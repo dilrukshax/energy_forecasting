@@ -11,22 +11,20 @@ it exactly like a recurrent network.
 
 from __future__ import annotations
 
-from typing import Dict, List
-
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 
-from energy_forecast.models.base import Forecaster, PersistenceForecaster, SklearnForecaster
 from energy_forecast.config import Config
-from energy_forecast.utils.logging import get_logger
 from energy_forecast.features.preprocessing import TargetTransformer
+from energy_forecast.models.base import Forecaster, PersistenceForecaster, SklearnForecaster
+from energy_forecast.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def build_baselines(transformer: TargetTransformer, config: Config) -> List[Forecaster]:
+def build_baselines(transformer: TargetTransformer, config: Config) -> list[Forecaster]:
     """Instantiate the reference models, unfitted.
 
     Args:
@@ -35,6 +33,7 @@ def build_baselines(transformer: TargetTransformer, config: Config) -> List[Fore
 
     Returns:
         Persistence, ridge and random forest, in reporting order.
+
     """
     return [
         PersistenceForecaster(),
@@ -47,10 +46,12 @@ def build_baselines(transformer: TargetTransformer, config: Config) -> List[Fore
     ]
 
 
-def run_baselines(X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
+def run_baselines(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
+                  X_test: np.ndarray, X_val_frame: pd.DataFrame,
                   X_test_frame: pd.DataFrame, transformer: TargetTransformer,
-                  config: Config) -> Dict[str, np.ndarray]:
-    """Fit every baseline and return its test predictions in Wh.
+                  config: Config) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray],
+                                           dict[str, Forecaster]]:
+    """Fit every baseline and return validation/test predictions and fitted models.
 
     Persistence reads a column of the unscaled design matrix; the learned models take the
     scaled, selected matrices. That difference is handled here rather than leaking into the
@@ -59,23 +60,31 @@ def run_baselines(X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
     Args:
         X_train: Scaled, selected training features.
         y_train: Training target in model space.
+        X_val: Scaled, selected validation features.
         X_test: Scaled, selected test features.
+        X_val_frame: Unscaled validation design matrix for persistence.
         X_test_frame: Unscaled test design matrix, for the persistence lag column.
         transformer: Fitted target transformer.
         config: Loaded configuration.
 
     Returns:
         Mapping of model name to predictions in Wh.
+
     """
-    predictions: Dict[str, np.ndarray] = {}
+    val_predictions: dict[str, np.ndarray] = {}
+    test_predictions: dict[str, np.ndarray] = {}
+    fitted: dict[str, Forecaster] = {}
 
     for model in build_baselines(transformer, config):
         if isinstance(model, PersistenceForecaster):
             model.fit(X_test_frame)
-            predictions[model.name] = model.predict(X_test_frame)
+            val_predictions[model.name] = model.predict(X_val_frame)
+            test_predictions[model.name] = model.predict(X_test_frame)
         else:
             model.fit(X_train, y_train)
-            predictions[model.name] = model.predict(X_test)
+            val_predictions[model.name] = model.predict(X_val)
+            test_predictions[model.name] = model.predict(X_test)
+        fitted[model.name] = model
         logger.info("baseline ready: %s", model.name)
 
-    return predictions
+    return val_predictions, test_predictions, fitted

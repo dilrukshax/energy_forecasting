@@ -9,9 +9,9 @@ import pandas as pd
 import pytest
 from sklearn.linear_model import Ridge
 
-from energy_forecast.models.base import Forecaster, PersistenceForecaster, SklearnForecaster
 from energy_forecast.exceptions import EnergyForecastError, LeakageError, NotFittedError
 from energy_forecast.features.preprocessing import TargetTransformer
+from energy_forecast.models.base import Forecaster, PersistenceForecaster, SklearnForecaster
 from energy_forecast.utils.tracking import (
     compare_runs,
     config_digest,

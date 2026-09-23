@@ -19,8 +19,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from energy_forecast.utils.logging import get_logger
 from energy_forecast.data.splitting import Split
+from energy_forecast.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -34,6 +34,7 @@ class SequenceData:
         y_train, y_val, y_test: Targets in model space.
         test_index: Timestamps of the test targets, for plotting.
         lookback: Window length in steps.
+
     """
 
     X_train: np.ndarray
@@ -78,6 +79,7 @@ def make_sequences(features: np.ndarray, targets: np.ndarray,
 
     Raises:
         ValueError: if the inputs disagree on length or are shorter than the window.
+
     """
     if features.shape[0] != targets.shape[0]:
         raise ValueError("features and targets must have the same number of rows")
@@ -98,14 +100,19 @@ def build_sequence_data(X_train: np.ndarray, X_val: np.ndarray, X_test: np.ndarr
     """Window the whole timeline once, then partition by target position.
 
     Args:
-        X_train, X_val, X_test: Scaled, selected feature matrices for the three blocks.
-        y_train, y_val, y_test: Targets in model space for the three blocks.
+        X_train: Scaled training feature matrix.
+        X_val: Scaled validation feature matrix.
+        X_test: Scaled test feature matrix.
+        y_train: Training targets in model space.
+        y_val: Validation targets in model space.
+        y_test: Test targets in model space.
         split: The chronological split, for its boundary positions.
         index: Timestamp index of the full design matrix.
         lookback: Window length in steps.
 
     Returns:
         A :class:`SequenceData`.
+
     """
     features = np.vstack([X_train, X_val, X_test])
     targets = np.concatenate([y_train, y_val, y_test])

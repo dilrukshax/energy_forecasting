@@ -10,9 +10,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from energy_forecast.data.splitting import chronological_split
 from energy_forecast.features import FeatureBuilder
 from energy_forecast.features.preprocessing import Preprocessor, TargetTransformer, Winsoriser
-from energy_forecast.data.splitting import chronological_split
 
 
 @pytest.fixture()

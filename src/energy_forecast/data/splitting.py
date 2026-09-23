@@ -27,6 +27,7 @@ class Split:
         X_test, y_test: Final block, touched once, to report.
         val_start, test_start: Integer positions of the two boundaries, needed to align the
             windowed sequences with the flat rows.
+
     """
 
     X_train: pd.DataFrame
@@ -66,6 +67,7 @@ def chronological_split(X: pd.DataFrame, y: pd.Series, config: Config) -> Split:
 
     Raises:
         ValueError: if X and y are misaligned or the index is not sorted.
+
     """
     if not X.index.equals(y.index):
         raise ValueError("X and y must share an identical index")
