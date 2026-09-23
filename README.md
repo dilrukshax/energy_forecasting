@@ -8,7 +8,6 @@ Prepared for the *Multivariate Time-Series Prediction Using Deep Learning* asses
 brief allows all tasks in one notebook; this goes further and structures the work the way it
 would be structured if it had to be retrained on a schedule.
 
-See [the requirement audit](docs/ASSESSMENT_AUDIT.md) for a line-by-line check against the brief.
 
 ---
 
@@ -102,27 +101,60 @@ See [the requirement audit](docs/ASSESSMENT_AUDIT.md) for a line-by-line check a
 
 ## Setup
 
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-
-pip install -r requirements.txt    # versions used for this assessment run
-pip install -e . --no-deps         # install the package and CLI
-```
-
-Requires Python 3.11+ for the pinned environment. `matplotlib>=3.9` is a hard requirement.
-
-## Usage
+Run these commands in a macOS or Linux terminal. Python 3.11 is the version used for the
+assessment run. First, enter the project directory on this Mac:
 
 ```bash
-make validate       # data quality report: gaps, duplicates, frozen sensors
-make audit          # serving-time availability audit for every feature
-make train-fast     # baselines only; no TensorFlow needed
-make train          # full run: baselines, LSTM/GRU/CNN-LSTM, tuning, figures, metrics.json
-make test           # full test suite
-make test-fast      # only the tests that do not touch the real dataset
-make lint           # ruff + mypy
+cd /Users/dilandilaruksha/Project/energy_forecasting
 ```
+
+For a fresh checkout on another computer, clone the repository instead:
+
+```bash
+git clone https://github.com/dilrukshax/energy_forecasting.git
+cd energy_forecasting
+```
+
+Then create the environment and install dependencies:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip install -e . --no-deps
+```
+
+## Run the project
+
+From the activated environment, validate the data, check feature availability, preprocess,
+run the tests and lint checks, then train:
+
+```bash
+make validate
+make audit
+make preprocess
+make test
+make lint
+make train-fast
+make train
+```
+
+`make train-fast` is an optional baseline-only run. `make train` runs the full pipeline,
+including the deep models and tuning, and writes the final model, metrics, and figures. If you
+run both, keep `make train` last so its results are the final saved artifacts. For a
+shorter test run, use `make test-fast`.
+
+Generate predictions from the supplied dataset, inspect recorded runs, and open the report:
+
+```bash
+energy-forecast predict --input data/raw/energy_data_set.csv --output reports/predictions.csv
+energy-forecast runs
+jupyter notebook notebooks/01_report.ipynb
+```
+
+The notebook already contains the report outputs. Running all its cells executes the analysis
+and training again.
 
 Scripts, for schedulers that prefer a file to a console entry point:
 
@@ -130,13 +162,6 @@ Scripts, for schedulers that prefer a file to a console entry point:
 python scripts/preprocess.py            # materialise data/processed/
 python scripts/train.py --skip-deep
 python scripts/predict.py --input data/raw/new_batch.csv --output reports/predictions.csv
-```
-
-Serving and run history:
-
-```bash
-energy-forecast predict --input data/raw/new_batch.csv --output reports/predictions.csv
-energy-forecast runs                 # every recorded run, best first
 ```
 
 In Docker:
