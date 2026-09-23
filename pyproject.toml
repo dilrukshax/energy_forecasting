@@ -51,7 +51,5 @@ ignore = ["D203", "D213"]
 "tests/*" = ["D"]
 
 [tool.mypy]
-# Match the pinned Python 3.11 environment.
-python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_ignores = true
