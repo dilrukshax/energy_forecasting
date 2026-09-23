@@ -18,7 +18,7 @@
     },
     {
       "model": "RandomForest",
-      "mae": 22.89132209517479,
+      "mae": 22.891322095174786,
       "rmse": 57.13510610609127,
       "mape": 19.007677216369398,
       "r2": 0.5713732153883653,
@@ -58,12 +58,12 @@
     }
   ],
   "best_model": "RandomForest",
-  "best_mae_wh": 22.89132209517479,
+  "best_mae_wh": 22.891322095174786,
   "selection_basis": "validation MAE",
   "lowest_test_mae_model": "gru",
   "test_mean_wh": 94.36198611852643,
   "persistence_mae_wh": 25.678056593699946,
-  "improvement_over_persistence_pct": 10.85259115446017,
+  "improvement_over_persistence_pct": 10.852591154460182,
   "error_by_level": {
     "mean_abs_error": {
       "<50": 7.27,
